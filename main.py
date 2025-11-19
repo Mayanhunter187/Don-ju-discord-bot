@@ -66,14 +66,25 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=False):
+        # This method is now a wrapper that does both extraction and creation
+        # Useful for the player loop if it encounters a raw string
+        loop = loop or asyncio.get_event_loop()
+        data = await cls.get_info(url, loop=loop, stream=stream)
+        return cls.create_from_data(data)
+
+    @classmethod
+    async def get_info(cls, url, *, loop=None, stream=False):
         loop = loop or asyncio.get_event_loop()
         data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
 
         if 'entries' in data:
             # take first item from a playlist
             data = data['entries'][0]
+        return data
 
-        filename = data['url'] if stream else ytdl.prepare_filename(data)
+    @classmethod
+    def create_from_data(cls, data):
+        filename = data['url']
         return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
 class MusicPlayer:
@@ -103,8 +114,15 @@ class MusicPlayer:
             except asyncio.TimeoutError:
                 return self.destroy(self.guild)
 
-            if not isinstance(source, YTDLSource):
-                # Source was probably a stream (not downloaded)
+            if isinstance(source, dict):
+                # It's pre-fetched data
+                try:
+                    source = YTDLSource.create_from_data(source)
+                except Exception as e:
+                    await self.channel.send(f'Error creating audio source: {e}')
+                    continue
+            elif not isinstance(source, YTDLSource):
+                # Source was probably a stream (not downloaded) and not a dict
                 try:
                     source = await YTDLSource.from_url(source, loop=self.bot.loop, stream=True)
                 except Exception as e:
@@ -158,7 +176,7 @@ class Music(commands.Cog):
     @app_commands.describe(search="The YouTube URL or search query")
     async def play(self, interaction: discord.Interaction, search: str):
         """Plays a song."""
-        await interaction.response.defer() # Defer interaction as extraction might take time
+        await interaction.response.defer() # Defer interaction
         
         player = self.get_player(interaction)
 
@@ -173,12 +191,20 @@ class Music(commands.Cog):
         if not search.startswith(('http://', 'https://')):
             search = f'ytsearch:{search}'
 
-        await player.queue.put(search)
-        
-        # If it was a search, show the query. If URL, show URL.
-        # Note: We don't know the video title yet until it's processed.
-        display_search = search.replace('ytsearch:', '')
-        await interaction.followup.send(f'Queued: {display_search}')
+        # Notify user we are working on it
+        await interaction.followup.send(f"Searching and downloading metadata for `{search.replace('ytsearch:', '')}`...")
+
+        try:
+            # Extract info immediately
+            data = await YTDLSource.get_info(search, loop=self.bot.loop, stream=True)
+            
+            await player.queue.put(data)
+            
+            # Update with the result
+            await interaction.edit_original_response(content=f"Queued: **[{data['title']}]({data['webpage_url']})**")
+            
+        except Exception as e:
+            await interaction.edit_original_response(content=f"Error finding song: {e}")
 
     @app_commands.command(name="pause", description="Pauses the song")
     async def pause(self, interaction: discord.Interaction):
