@@ -14,6 +14,42 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# YouTube DL options
+ytdl_format_options = {
+    'format': 'bestaudio/best',
+    'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
+    'restrictfilenames': True,
+    'noplaylist': True,
+    'nocheckcertificate': True,
+    'ignoreerrors': False,
+    'logtostderr': False,
+    'quiet': False,
+    'no_warnings': False,
+    'default_search': 'auto',
+    'source_address': '0.0.0.0',
+    'cookiefile': '/app/cookies.txt',
+    'verbose': True,
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['ios']
+        }
+    }
+}
+
+ffmpeg_options = {
+    'options': '-vn',
+    # Reconnect options to handle unstable connections
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
+}
+
+ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
+
+# Debug: Check if cookies file exists and has content
+if os.path.exists('/app/cookies.txt'):
+    print(f"DEBUG: cookies.txt found. Size: {os.path.getsize('/app/cookies.txt')} bytes")
+else:
+    print("DEBUG: cookies.txt NOT FOUND at /app/cookies.txt")
+
 class YTDLSource(discord.PCMVolumeTransformer):
     def __init__(self, source, *, data, volume=0.5):
         super().__init__(source, volume)
