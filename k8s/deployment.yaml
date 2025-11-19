@@ -204,6 +204,178 @@ spec:
           requests:
             memory: "256Mi"
             cpu: "250m"
+matchLabels:
+      app: discord-music-bot
+  template:
+    metadata:
+      labels:
+        app: discord-music-bot
+    spec:
+      containers:
+      - name: discord-music-bot
+        image: discord-music-bot:local
+        imagePullPolicy: Never
+        env:
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discord-music-bot
+  labels:
+    app: discord-music-bot
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: discord-music-bot
+  template:
+    metadata:
+      labels:
+        app: discord-music-bot
+    spec:
+      containers:
+      - name: discord-music-bot
+        image: discord-music-bot:local
+        imagePullPolicy: Never
+        env:
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discord-music-bot
+  labels:
+    app: discord-music-bot
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: discord-music-bot
+  template:
+    metadata:
+      labels:
+        app: discord-music-bot
+    spec:
+      containers:
+      - name: discord-music-bot
+        image: discord-music-bot:local
+        imagePullPolicy: Never
+        env:
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discord-music-bot
+  labels:
+    app: discord-music-bot
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: discord-music-bot
+  template:
+    metadata:
+      labels:
+        app: discord-music-bot
+    spec:
+      containers:
+      - name: discord-music-bot
+        image: discord-music-bot:local
+        imagePullPolicy: Never
+        env:
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discord-music-bot
+  labels:
+    app: discord-music-bot
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: discord-music-bot
+  template:
+    metadata:
+      labels:
+        app: discord-music-bot
+    spec:
+      containers:
+      - name: discord-music-bot
+        image: discord-music-bot:local
+        imagePullPolicy: Never
+        env:
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discord-music-bot
+  labels:
+    app: discord-music-bot
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: discord-music-bot
+  template:
+    metadata:
+      labels:
+        app: discord-music-bot
+    spec:
+      containers:
+      - name: discord-music-bot
+        image: discord-music-bot:local
+        imagePullPolicy: Never
+        env:
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discord-music-bot
+  labels:
+    app: discord-music-bot
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: discord-music-bot
+  template:
+    metadata:
+      labels:
+        app: discord-music-bot
+    spec:
+      containers:
+      - name: discord-music-bot
+        image: discord-music-bot:local
+        imagePullPolicy: Never
+        env:
+        - name: DISCORD_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: discord-bot-secret
+              key: token
+        
+        # Mount cookies from secret
+        volumeMounts:
+        - name: cookie-volume
+          mountPath: "/tmp/cookies-ro/cookies.txt"
+          subPath: "cookies.txt"
+          readOnly: true
+        - name: songs-volume
+          mountPath: "/app/songs"
+
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
 
       volumes:
       - name: cookie-volume
@@ -211,5 +383,5 @@ spec:
           secretName: youtube-cookies
       - name: songs-volume
         hostPath:
-          path: /tmp/discord-bot-songs
+          path: /var/lib/discord-bot-songs
           type: DirectoryOrCreate
