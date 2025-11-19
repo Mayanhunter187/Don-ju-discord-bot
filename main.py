@@ -1,28 +1,16 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 import os
 from dotenv import load_dotenv
 import asyncio
 import shutil
 import subprocess
+import yt_dlp
 
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
-
-# Debug: Check environment and node availability
-# Explicitly add common paths to PATH to ensure node is found
-os.environ['PATH'] = os.environ.get('PATH', '') + ':/usr/bin:/usr/local/bin'
-print(f"DEBUG: PATH={os.environ.get('PATH')}", flush=True)
-print(f"DEBUG: node path={shutil.which('node')}", flush=True)
-try:
-    node_version = subprocess.check_output(['node', '-v'], stderr=subprocess.STDOUT).decode().strip()
-    print(f"DEBUG: node version={node_version}", flush=True)
-except Exception as e:
-    print(f"DEBUG: node execution failed: {e}", flush=True)
-
-# Import yt_dlp AFTER setting PATH to ensure it sees the update
-import yt_dlp
 
 # Bot setup
 intents = discord.Intents.default()
@@ -55,9 +43,6 @@ ytdl_format_options = {
     'remote_components': ['ejs:github']
 }
 
-# Debug: Check environment and node availability
-
-
 ffmpeg_options = {
     'options': '-vn',
     # Reconnect options to handle unstable connections
@@ -66,7 +51,7 @@ ffmpeg_options = {
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
-# Debug: Check if cookies file exists and has content
+# Debug: Check environment and node availability (Simplified)
 if os.path.exists('/app/cookies.txt'):
     print(f"DEBUG: cookies.txt found. Size: {os.path.getsize('/app/cookies.txt')} bytes")
 else:
@@ -92,12 +77,10 @@ class YTDLSource(discord.PCMVolumeTransformer):
         return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
 class MusicPlayer:
-    def __init__(self, ctx):
-        self.bot = ctx.bot
-        self.guild = ctx.guild
-        self.channel = ctx.channel
-        self.cog = ctx.cog
-
+    def __init__(self, interaction):
+        self.bot = interaction.client
+        self.guild = interaction.guild
+        self.channel = interaction.channel
         self.queue = asyncio.Queue()
         self.next = asyncio.Event()
 
@@ -105,7 +88,7 @@ class MusicPlayer:
         self.volume = .5
         self.current = None
 
-        ctx.bot.loop.create_task(self.player_loop())
+        self.bot.loop.create_task(self.player_loop())
 
     async def player_loop(self):
         await self.bot.wait_until_ready()
@@ -122,7 +105,6 @@ class MusicPlayer:
 
             if not isinstance(source, YTDLSource):
                 # Source was probably a stream (not downloaded)
-                # So we should probably define that
                 try:
                     source = await YTDLSource.from_url(source, loop=self.bot.loop, stream=True)
                 except Exception as e:
@@ -143,7 +125,10 @@ class MusicPlayer:
             self.current = None
 
     def destroy(self, guild):
-        return self.bot.loop.create_task(self.cog.cleanup(guild))
+        # Cleanup via the Cog
+        cog = self.bot.get_cog("Music")
+        if cog:
+            return self.bot.loop.create_task(cog.cleanup(guild))
 
 class Music(commands.Cog):
     def __init__(self, bot):
@@ -161,68 +146,62 @@ class Music(commands.Cog):
         except KeyError:
             pass
 
-    def get_player(self, ctx):
+    def get_player(self, interaction):
         try:
-            player = self.players[ctx.guild.id]
+            player = self.players[interaction.guild.id]
         except KeyError:
-            player = MusicPlayer(ctx)
-            self.players[ctx.guild.id] = player
+            player = MusicPlayer(interaction)
+            self.players[interaction.guild.id] = player
         return player
 
-    @commands.command(name='play', help='Plays a song from YouTube')
-    async def play(self, ctx, *, search: str):
-        """Plays a song.
-        If there are songs in the queue, this will be queued until the
-        other songs finished playing.
-        This command automatically searches from various sites if no URL is provided.
-        """
-        player = self.get_player(ctx)
-
-        # If download is False, source will be a dict which will be used later to create the source.
-        # However, for simplicity in this example we're just passing the search string
-        # and handling the extraction in the player loop for streams.
-        # Ideally we'd extract info here to show "Queued: Title" immediately.
+    @app_commands.command(name="play", description="Plays a song from YouTube")
+    @app_commands.describe(search="The YouTube URL or search query")
+    async def play(self, interaction: discord.Interaction, search: str):
+        """Plays a song."""
+        await interaction.response.defer() # Defer interaction as extraction might take time
         
-        if ctx.voice_client is None:
-            if ctx.author.voice:
-                await ctx.author.voice.channel.connect()
+        player = self.get_player(interaction)
+
+        if interaction.guild.voice_client is None:
+            if interaction.user.voice:
+                await interaction.user.voice.channel.connect()
             else:
-                await ctx.send("You are not connected to a voice channel.")
+                await interaction.followup.send("You are not connected to a voice channel.")
                 return
 
         await player.queue.put(search)
-        await ctx.send(f'Queued: {search}')
+        await interaction.followup.send(f'Queued: {search}')
 
-    @commands.command(name='pause', help='Pauses the song')
-    async def pause(self, ctx):
+    @app_commands.command(name="pause", description="Pauses the song")
+    async def pause(self, interaction: discord.Interaction):
         """Pauses the currently played song."""
-        vc = ctx.voice_client
+        vc = interaction.guild.voice_client
         if not vc or not vc.is_playing():
-            return await ctx.send('I am not currently playing anything!', delete_after=20)
+            return await interaction.response.send_message('I am not currently playing anything!', ephemeral=True)
         elif vc.is_paused():
-            return
+            return await interaction.response.send_message('Already paused.', ephemeral=True)
 
         vc.pause()
-        await ctx.send(f'**`{ctx.author}`**: Paused the song!')
+        await interaction.response.send_message(f'**`{interaction.user}`**: Paused the song!')
 
-    @commands.command(name='resume', help='Resumes the song')
-    async def resume(self, ctx):
+    @app_commands.command(name="resume", description="Resumes the song")
+    async def resume(self, interaction: discord.Interaction):
         """Resumes the currently played song."""
-        vc = ctx.voice_client
+        vc = interaction.guild.voice_client
         if not vc or not vc.is_connected():
-            return await ctx.send('I am not currently playing anything!', delete_after=20)
+            return await interaction.response.send_message('I am not currently playing anything!', ephemeral=True)
         elif not vc.is_paused():
-            return
+            return await interaction.response.send_message('Already playing.', ephemeral=True)
 
         vc.resume()
-        await ctx.send(f'**`{ctx.author}`**: Resumed the song!')
+        await interaction.response.send_message(f'**`{interaction.user}`**: Resumed the song!')
 
-    @commands.command(name='skip', help='Skips the song')
-    async def skip(self, ctx):
+    @app_commands.command(name="skip", description="Skips the song")
+    async def skip(self, interaction: discord.Interaction):
         """Skip the song."""
-        vc = ctx.voice_client
+        vc = interaction.guild.voice_client
         if not vc or not vc.is_connected():
-            return await ctx.send('I am not currently playing anything!', delete_after=20)
+            return await interaction.response.send_message('I am not currently playing anything!', ephemeral=True)
 
         if vc.is_paused():
             pass
@@ -230,49 +209,49 @@ class Music(commands.Cog):
             return
 
         vc.stop()
-        await ctx.send(f'**`{ctx.author}`**: Skipped the song!')
+        await interaction.response.send_message(f'**`{interaction.user}`**: Skipped the song!')
 
-    @commands.command(name='stop', help='Stops the song and clears the queue')
-    async def stop(self, ctx):
+    @app_commands.command(name="stop", description="Stops the song and clears the queue")
+    async def stop(self, interaction: discord.Interaction):
         """Stops playing song and clears the queue."""
-        vc = ctx.voice_client
+        vc = interaction.guild.voice_client
         if not vc or not vc.is_connected():
-            return await ctx.send('I am not currently playing anything!', delete_after=20)
+            return await interaction.response.send_message('I am not currently playing anything!', ephemeral=True)
 
-        await self.cleanup(ctx.guild)
-        await ctx.send(f'**`{ctx.author}`**: Stopped and disconnected!')
+        await self.cleanup(interaction.guild)
+        await interaction.response.send_message(f'**`{interaction.user}`**: Stopped and disconnected!')
 
-    @commands.command(name='queue', help='Shows the queue')
-    async def queue_info(self, ctx):
+    @app_commands.command(name="queue", description="Shows the queue")
+    async def queue_info(self, interaction: discord.Interaction):
         """Retrieve a basic queue of upcoming songs."""
-        vc = ctx.voice_client
+        vc = interaction.guild.voice_client
         if not vc or not vc.is_connected():
-            return await ctx.send('I am not currently connected to voice!', delete_after=20)
+            return await interaction.response.send_message('I am not currently connected to voice!', ephemeral=True)
 
-        player = self.get_player(ctx)
+        player = self.get_player(interaction)
         if player.queue.empty():
-            return await ctx.send('There are currently no more queued songs.')
+            return await interaction.response.send_message('There are currently no more queued songs.')
 
-        # This is a simplified queue view since we are storing raw search strings/urls in the queue
-        # until they are processed.
         upcoming = list(player.queue._queue)
         fmt = '\n'.join(f'**{i + 1}.** {str(song)}' for i, song in enumerate(upcoming))
         embed = discord.Embed(title=f'Upcoming - Next {len(upcoming)}', description=fmt)
-        await ctx.send(embed=embed)
-
-    @commands.command(name='forward', help='Forwards the song by seconds')
-    async def forward(self, ctx, seconds: int = 10):
-        """Forwards the current song by a set amount of seconds."""
-        # Seeking is complex with discord.py's default player.
-        # We essentially have to restart the stream with an offset.
-        # This is a placeholder for now as it requires tracking current position.
-        await ctx.send("Seeking is not fully supported in this simple version yet, sorry!")
+        await interaction.response.send_message(embed=embed)
 
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
     print('------')
+    
+    # Add the cog
     await bot.add_cog(Music(bot))
+    
+    # Sync commands globally (or to specific guild for faster testing)
+    # Note: Global sync can take up to an hour. For instant results in dev, use guild=discord.Object(id=...)
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} command(s) globally")
+    except Exception as e:
+        print(f"Failed to sync commands: {e}")
 
 if __name__ == "__main__":
     if TOKEN == 'your_token_here' or not TOKEN:
