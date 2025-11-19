@@ -52,9 +52,7 @@ ytdl_format_options = {
     'js_runtimes': {
         'node': {}
     },
-    'remote_components': {
-        'ejs': 'github'
-    }
+    'remote_components': ['ejs:github']
 }
 
 # Debug: Check environment and node availability
