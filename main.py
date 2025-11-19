@@ -9,6 +9,11 @@ import yt_dlp
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
+# Bot setup
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix='!', intents=intents)
+
 class YTDLSource(discord.PCMVolumeTransformer):
     def __init__(self, source, *, data, volume=0.5):
         super().__init__(source, volume)
