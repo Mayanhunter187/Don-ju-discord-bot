@@ -206,11 +206,11 @@ class SearchButton(ui.Button):
         if interaction.user != self.interaction_user:
             return await interaction.response.send_message("This search menu is not for you!", ephemeral=True)
         
-        # Edit the message immediately to show processing and remove buttons
-        await interaction.response.edit_message(content="🔄 **Processing selection...**", view=None)
+        # Defer the interaction (acknowledges it)
+        await interaction.response.defer()
         
-        # Queue the song, passing the message to edit
-        await self.cog.queue_song(interaction, self.video_url, message_to_edit=interaction.message)
+        # Queue the song
+        await self.cog.queue_song(interaction, self.video_url)
 
 class SearchView(ui.View):
     def __init__(self, cog, interaction_user):
@@ -224,24 +224,6 @@ class SearchView(ui.View):
             return await interaction.response.send_message("This search menu is not for you!", ephemeral=True)
         
         await interaction.response.edit_message(content="Search cancelled.", view=None, embed=None)
-        self.stop()
-
-class Music(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-        self.players = {}
-
-    def cleanup_cache(self):
-        cache_dir = 'songs'
-        max_size = 10 * 1024 * 1024 * 1024 # 10GB
-        
-        if not os.path.exists(cache_dir):
-            return
-
-        total_size = 0
-        files = []
-
-        for f in os.listdir(cache_dir):
             path = os.path.join(cache_dir, f)
             if os.path.isfile(path):
                 size = os.path.getsize(path)
@@ -282,7 +264,7 @@ class Music(commands.Cog):
         return player
 
 
-    async def queue_song(self, interaction: discord.Interaction, query: str, message_to_edit: discord.Message = None):
+    async def queue_song(self, interaction: discord.Interaction, query: str):
         """Helper to queue a song from URL."""
         # Flavor Messages
         flavor_texts = {
@@ -318,41 +300,27 @@ class Music(commands.Cog):
                 except Exception as e:
                     print(f"Failed to load cache for {video_id}: {e}")
 
-        # Determine initial message
-        status_msg = message_to_edit
-        
+        # Determine initial message content
+        initial_msg = ""
         if is_cache_hit and cached_data:
-            msg = random.choice(flavor_texts["cache"]).format(query=cached_data.get('title', query))
+            initial_msg = random.choice(flavor_texts["cache"]).format(query=cached_data.get('title', query))
             data = cached_data
-            
-            if status_msg:
-                await status_msg.edit(content=msg)
-            elif not interaction.response.is_done():
-                await interaction.response.send_message(msg)
-                status_msg = await interaction.original_response()
-            else:
-                status_msg = await interaction.followup.send(msg)
         else:
-            # We don't have metadata yet, so we don't know if the audio file exists (legacy cache)
-            # Send a neutral processing message
-            processing_msg = f"📡 **Establishing Connection...** Accessing `{query}`..."
-            
-            if status_msg:
-                await status_msg.edit(content=processing_msg)
-            elif not interaction.response.is_done():
-                await interaction.response.send_message(processing_msg)
-                status_msg = await interaction.original_response()
-            else:
-                status_msg = await interaction.followup.send(processing_msg)
+            initial_msg = f"📡 **Establishing Connection...** Accessing `{query}`..."
 
+        # Send/Update status using edit_original_response (works for both deferred commands and button interactions)
+        try:
+            await interaction.edit_original_response(content=initial_msg, view=None, embed=None)
+        except discord.NotFound:
+            # Fallback if original response is gone (rare)
+            await interaction.followup.send(initial_msg)
+
+        if not (is_cache_hit and cached_data):
             # Fetch info
             try:
                 data = await YTDLSource.get_info(query, loop=self.bot.loop, stream=True)
             except Exception as e:
-                if status_msg:
-                     await status_msg.edit(content=f"Error finding song: {e}")
-                elif not interaction.response.is_done():
-                    await interaction.response.send_message(f"Error finding song: {e}")
+                await interaction.edit_original_response(content=f"Error finding song: {e}")
                 return
             
             # Now check if audio file exists (Legacy Cache Check)
@@ -361,13 +329,11 @@ class Music(commands.Cog):
                 is_cache_hit = True
                 # Update message to Cache Hit
                 new_msg = random.choice(flavor_texts["cache"]).format(query=data.get('title', query))
-                if status_msg:
-                    await status_msg.edit(content=new_msg)
+                await interaction.edit_original_response(content=new_msg)
             else:
                 # Update message to Downloading
                 new_msg = random.choice(flavor_texts["download"]).format(query=data.get('title', query))
-                if status_msg:
-                    await status_msg.edit(content=new_msg)
+                await interaction.edit_original_response(content=new_msg)
 
         try:
             player = self.get_player(interaction)
@@ -394,21 +360,12 @@ class Music(commands.Cog):
             else:
                 embed.set_footer(text="☁️ New Download")
 
-            if status_msg:
-                await status_msg.edit(content=None, embed=embed)
-            else:
-                await interaction.followup.send(embed=embed)
+            await interaction.edit_original_response(content=None, embed=embed)
             
         except ValueError as e:
-             if status_msg:
-                 await status_msg.edit(content=f"{e}")
-             else:
-                 await interaction.followup.send(f"{e}")
+             await interaction.edit_original_response(content=f"{e}")
         except Exception as e:
-             if status_msg:
-                 await status_msg.edit(content=f"An error occurred: {e}")
-             else:
-                 await interaction.followup.send(f"An error occurred: {e}")
+             await interaction.edit_original_response(content=f"An error occurred: {e}")
 
     @app_commands.command(name="play", description="Plays a song from YouTube")
     @app_commands.describe(search="The YouTube URL or search query")
