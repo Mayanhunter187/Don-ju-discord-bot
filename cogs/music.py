@@ -320,6 +320,14 @@ class Music(commands.Cog):
             if data.get('duration'):
                 embed.add_field(name="Duration", value=f"{int(data['duration']//60)}:{int(data['duration']%60):02d}")
             
+        except Exception as e:
+            await interaction.edit_original_response(content=f"Error finding song: {e}")
+
+    @app_commands.command(name="pause", description="Pauses the song")
+    async def pause(self, interaction: discord.Interaction):
+        """Pauses the currently played song."""
+        vc = interaction.guild.voice_client
+        if not vc or not vc.is_playing():
             return await interaction.response.send_message('I am not currently playing anything!', ephemeral=True)
         elif vc.is_paused():
             return await interaction.response.send_message('Already paused.', ephemeral=True)
