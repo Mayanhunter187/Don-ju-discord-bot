@@ -44,7 +44,7 @@ ffmpeg_options_local = {
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
 class YTDLSource(discord.PCMVolumeTransformer):
-    def __init__(self, source, *, data, volume=0.5):
+    def __init__(self, source, *, data, volume=0.5, is_cached=False):
         super().__init__(source, volume)
         self.data = data
         self.title = data.get('title')
@@ -53,6 +53,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.duration = data.get('duration')
         self.uploader = data.get('uploader')
         self.requested_by = data.get('requested_by')
+        self.is_cached = is_cached
 
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=False):
@@ -73,7 +74,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         return data
 
     @classmethod
-    def create_from_data(cls, data, stream=False):
+    def create_from_data(cls, data, stream=False, is_cached=False):
         # Max length check (10 minutes = 600 seconds)
         duration = data.get('duration')
         if duration and duration > 600:
@@ -81,7 +82,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
         filename = data['url'] if stream else ytdl.prepare_filename(data)
         options = ffmpeg_options_stream if stream else ffmpeg_options_local
-        return cls(discord.FFmpegPCMAudio(filename, **options), data=data)
+        return cls(discord.FFmpegPCMAudio(filename, **options), data=data, is_cached=is_cached)
 
 class MusicPlayer:
     def __init__(self, interaction):
@@ -115,7 +116,9 @@ class MusicPlayer:
                 try:
                     # Check if we need to download (Cache Logic)
                     filename = ytdl.prepare_filename(source)
-                    if not os.path.exists(filename):
+                    is_cached = os.path.exists(filename)
+                    
+                    if not is_cached:
                         # Cleanup cache if needed
                         self.bot.get_cog("Music").cleanup_cache()
                         
@@ -123,7 +126,7 @@ class MusicPlayer:
                         await self.bot.loop.run_in_executor(None, lambda: ytdl.extract_info(source['webpage_url'], download=True))
                     
                     # Create source from local file (stream=False)
-                    source = YTDLSource.create_from_data(source, stream=False)
+                    source = YTDLSource.create_from_data(source, stream=False, is_cached=is_cached)
                 except ValueError as e:
                     await self.channel.send(f"{e}")
                     continue
@@ -156,6 +159,12 @@ class MusicPlayer:
                     embed.add_field(name="Duration", value=f"{int(source.duration//60)}:{int(source.duration%60):02d}")
                 if source.requested_by:
                     embed.set_footer(text=f"Requested by {source.requested_by}")
+                
+                # Add Cache Status
+                if source.is_cached:
+                    embed.add_field(name="Source", value="💾 Played from Cache", inline=True)
+                else:
+                    embed.add_field(name="Source", value="☁️ Downloaded from YouTube", inline=True)
                 
                 self.np = await self.channel.send(embed=embed)
             except Exception as e:
@@ -310,18 +319,6 @@ class Music(commands.Cog):
             if data.get('duration'):
                 embed.add_field(name="Duration", value=f"{int(data['duration']//60)}:{int(data['duration']%60):02d}")
             
-            await interaction.edit_original_response(content=None, embed=embed)
-            
-        except ValueError as e:
-             await interaction.edit_original_response(content=f"{e}")
-        except Exception as e:
-            await interaction.edit_original_response(content=f"Error finding song: {e}")
-
-    @app_commands.command(name="pause", description="Pauses the song")
-    async def pause(self, interaction: discord.Interaction):
-        """Pauses the currently played song."""
-        vc = interaction.guild.voice_client
-        if not vc or not vc.is_playing():
             return await interaction.response.send_message('I am not currently playing anything!', ephemeral=True)
         elif vc.is_paused():
             return await interaction.response.send_message('Already paused.', ephemeral=True)
