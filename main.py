@@ -48,6 +48,9 @@ ytdl_format_options = {
         'youtube': {
             'player_client': ['tv']
         }
+    },
+    'js_runtimes': {
+        'node': {}
     }
 }
 
