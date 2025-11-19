@@ -37,7 +37,10 @@ ytdl_format_options = {
 }
 
 # Debug: Check environment and node availability
+# Debug: Check environment and node availability
 import shutil
+# Explicitly add common paths to PATH to ensure node is found
+os.environ['PATH'] = os.environ.get('PATH', '') + ':/usr/bin:/usr/local/bin'
 print(f"DEBUG: PATH={os.environ.get('PATH')}")
 print(f"DEBUG: node path={shutil.which('node')}")
 print(f"DEBUG: nodejs path={shutil.which('nodejs')}")
