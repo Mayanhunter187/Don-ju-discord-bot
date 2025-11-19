@@ -197,7 +197,7 @@ class SearchButton(ui.Button):
         emoji = "💾" if is_cached else "☁️"
         
         super().__init__(style=style, label=label, emoji=emoji)
-        self.url = url
+        self.video_url = url
         self.cog = cog
         self.interaction_user = interaction_user
 
@@ -210,7 +210,7 @@ class SearchButton(ui.Button):
         await interaction.response.edit_message(content="🔄 **Processing selection...**", view=None)
         
         # Queue the song, passing the message to edit
-        await self.cog.queue_song(interaction, self.url, message_to_edit=interaction.message)
+        await self.cog.queue_song(interaction, self.video_url, message_to_edit=interaction.message)
 
 class SearchView(ui.View):
     def __init__(self, cog, interaction_user):
