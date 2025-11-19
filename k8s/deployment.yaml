@@ -21,20 +21,35 @@ spec:
         image: discord-music-bot:local
         imagePullPolicy: Never
         env:
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discord-music-bot
+  labels:
+    app: discord-music-bot
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: discord-music-bot
+  template:
+    metadata:
+      labels:
+        app: discord-music-bot
+    spec:
+      containers:
+      - name: discord-music-bot
+        image: discord-music-bot:local
+        imagePullPolicy: Never
+        env:
         - name: DISCORD_TOKEN
           valueFrom:
             secretKeyRef:
               name: discord-bot-secret
               key: token
         
-        # --- ADD THIS SECTION (1/2): Mount the file ---
-        volumeMounts:
-        - name: cookie-volume
-          mountPath: "/tmp/cookies-ro/cookies.txt"
-          subPath: "cookies.txt"
-          readOnly: true
-        # ----------------------------------------------
-
         resources:
           limits:
             memory: "512Mi"
@@ -42,10 +57,3 @@ spec:
           requests:
             memory: "256Mi"
             cpu: "250m"
-
-      # --- ADD THIS SECTION (2/2): Define the volume ---
-      volumes:
-      - name: cookie-volume
-        secret:
-          secretName: youtube-cookies
-      # -------------------------------------------------
