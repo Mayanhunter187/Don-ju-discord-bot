@@ -11,15 +11,11 @@ jobs:
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.0
-        env:
-          # This passes the standard GitHub Token to the script environment
-          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }} 
         with:
           host: ${{ secrets.HOST_IP }}
           username: root
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          # We map the env var above to the script scope here:
-          envs: GITHUB_TOKEN
+          timeout: 30m
           script: |
             # Stop on any error
             set -e
@@ -28,14 +24,13 @@ jobs:
             mkdir -p $APP_DIR
             cd $APP_DIR
             
-            # GIT LOGIC WITH AUTHENTICATION
-            # We use the token passed from GitHub Secrets to authenticate the pull/clone
+            # Pull latest code
             if [ -d ".git" ]; then
               echo "Pulling latest changes..."
-              git pull https://Mayanhunter187:$GITHUB_TOKEN@github.com/Mayanhunter187/Don-ju-discord-bot.git main
+              git pull origin main
             else
               echo "Cloning repository..."
-              git clone https://Mayanhunter187:$GITHUB_TOKEN@github.com/Mayanhunter187/Don-ju-discord-bot.git .
+              git clone https://github.com/Mayanhunter187/Don-ju-discord-bot.git .
             fi
 
             # Build Image locally on the server

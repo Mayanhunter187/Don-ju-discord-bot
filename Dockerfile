@@ -20,4 +20,4 @@ COPY . /app
 RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
 # Run main.py when the container launches
-CMD python main.py
+CMD ["sh", "-c", "cp /tmp/cookies-ro/cookies.txt /app/cookies.txt && python main.py"]
