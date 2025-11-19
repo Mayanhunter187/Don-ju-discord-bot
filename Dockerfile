@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     libsodium23 \
     libopus0 \
     git \ 
+    nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the current directory contents into the container at /app
@@ -19,4 +20,4 @@ COPY . /app
 RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
 # Run main.py when the container launches
-CMD ["python", "main.py"]
+CMD cp /tmp/cookies-ro/cookies.txt /app/cookies.txt && python main.py
