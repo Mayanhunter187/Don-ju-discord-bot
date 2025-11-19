@@ -5,7 +5,9 @@ import asyncio
 import yt_dlp
 import os
 import json
+import json
 import re
+import random
 
 # YouTube DL options
 # YouTube DL options
@@ -204,13 +206,11 @@ class SearchButton(ui.Button):
         if interaction.user != self.interaction_user:
             return await interaction.response.send_message("This search menu is not for you!", ephemeral=True)
         
-        # Disable all buttons
-        for child in self.view.children:
-            child.disabled = True
-        await interaction.response.edit_message(view=self.view)
+        # Edit the message immediately to show processing and remove buttons
+        await interaction.response.edit_message(content="🔄 **Processing selection...**", view=None)
         
-        # Queue the song
-        await self.cog.queue_song(interaction, self.url)
+        # Queue the song, passing the message to edit
+        await self.cog.queue_song(interaction, self.url, message_to_edit=interaction.message)
 
 class SearchView(ui.View):
     def __init__(self, cog, interaction_user):
@@ -282,12 +282,22 @@ class Music(commands.Cog):
         return player
 
 
-    async def queue_song(self, interaction: discord.Interaction, query: str):
+    async def queue_song(self, interaction: discord.Interaction, query: str, message_to_edit: discord.Message = None):
         """Helper to queue a song from URL."""
         # Flavor Messages
         flavor_texts = {
-            "download": "⬇️ **Intercepting transmission...** Downloading `{query}`...",
-            "cache": "💿 **Dusting off the vinyl...** Found `{query}` in cache!"
+            "download": [
+                "⬇️ **Intercepting transmission...** Downloading `{query}`...",
+                "📡 **Acquiring signal...** Fetching `{query}`...",
+                "👾 **Decoding matrix...** Downloading `{query}`...",
+                "⚡ **Charging capacitors...** Getting `{query}` ready..."
+            ],
+            "cache": [
+                "💿 **Dusting off the vinyl...** Found `{query}` in cache!",
+                "💾 **Loading from memory banks...** `{query}` is ready!",
+                "📼 **Rewinding tape...** `{query}` found locally!",
+                "📦 **Unboxing archives...** `{query}` is cached!"
+            ]
         }
 
         # Try to find in cache first (Optimization)
@@ -308,21 +318,28 @@ class Music(commands.Cog):
                 except Exception as e:
                     print(f"Failed to load cache for {video_id}: {e}")
 
-        # Send status message (if not already sent by search menu, but here we assume fresh interaction or followup)
-        status_msg = None
+        # Determine initial message
+        status_msg = message_to_edit
         
         if is_cache_hit and cached_data:
-            msg = flavor_texts["cache"].format(query=cached_data.get('title', query))
+            msg = random.choice(flavor_texts["cache"]).format(query=cached_data.get('title', query))
             data = cached_data
-            if not interaction.response.is_done():
+            
+            if status_msg:
+                await status_msg.edit(content=msg)
+            elif not interaction.response.is_done():
                 await interaction.response.send_message(msg)
+                status_msg = await interaction.original_response()
             else:
-                await interaction.followup.send(msg)
+                status_msg = await interaction.followup.send(msg)
         else:
             # We don't have metadata yet, so we don't know if the audio file exists (legacy cache)
             # Send a neutral processing message
             processing_msg = f"📡 **Establishing Connection...** Accessing `{query}`..."
-            if not interaction.response.is_done():
+            
+            if status_msg:
+                await status_msg.edit(content=processing_msg)
+            elif not interaction.response.is_done():
                 await interaction.response.send_message(processing_msg)
                 status_msg = await interaction.original_response()
             else:
@@ -343,12 +360,12 @@ class Music(commands.Cog):
             if os.path.exists(filename):
                 is_cache_hit = True
                 # Update message to Cache Hit
-                new_msg = flavor_texts["cache"].format(query=data.get('title', query))
+                new_msg = random.choice(flavor_texts["cache"]).format(query=data.get('title', query))
                 if status_msg:
                     await status_msg.edit(content=new_msg)
             else:
                 # Update message to Downloading
-                new_msg = flavor_texts["download"].format(query=data.get('title', query))
+                new_msg = random.choice(flavor_texts["download"]).format(query=data.get('title', query))
                 if status_msg:
                     await status_msg.edit(content=new_msg)
 
@@ -383,17 +400,27 @@ class Music(commands.Cog):
                 await interaction.followup.send(embed=embed)
             
         except ValueError as e:
-             await interaction.followup.send(f"{e}")
+             if status_msg:
+                 await status_msg.edit(content=f"{e}")
+             else:
+                 await interaction.followup.send(f"{e}")
         except Exception as e:
-             await interaction.followup.send(f"An error occurred: {e}")
+             if status_msg:
+                 await status_msg.edit(content=f"An error occurred: {e}")
+             else:
+                 await interaction.followup.send(f"An error occurred: {e}")
 
     @app_commands.command(name="play", description="Plays a song from YouTube")
     @app_commands.describe(search="The YouTube URL or search query")
     async def play(self, interaction: discord.Interaction, search: str):
         """Plays a song."""
+        # Determine visibility based on input type
+        is_url = search.startswith(('http://', 'https://'))
+        
         # Defer immediately so we have time to process
         try:
-            await interaction.response.defer(ephemeral=True)
+            # URL = Public, Search = Private (Ephemeral)
+            await interaction.response.defer(ephemeral=not is_url)
         except discord.HTTPException as e:
             # If interaction is already acknowledged, we can proceed
             if e.code == 40060:
@@ -411,13 +438,15 @@ class Music(commands.Cog):
                 return
 
         # If URL, queue directly
-        if search.startswith(('http://', 'https://')):
+        if is_url:
             await self.queue_song(interaction, search)
             return
 
         # If Search Query, show menu
         search_query = f"ytsearch5:{search}"
-        await interaction.followup.send(f"🔎 **Scanning frequencies...** Searching for `{search}`...")
+        
+        # Send initial scanning message
+        scan_msg = await interaction.followup.send(f"🔎 **Scanning frequencies...** Searching for `{search}`...")
 
         try:
             data = await self.bot.loop.run_in_executor(
@@ -426,13 +455,14 @@ class Music(commands.Cog):
             )
             
             if 'entries' not in data or not data['entries']:
-                await interaction.followup.send("No results found.")
+                await scan_msg.edit(content="No results found.")
                 return
 
             view = SearchView(self, interaction.user)
             
-            # Process top 5 results
-            for entry in data['entries'][:5]:
+            # Process top 5 results (Fix: Convert to list to avoid islice error)
+            entries = list(data['entries'])
+            for entry in entries[:5]:
                 title = entry.get('title', 'Unknown Title')
                 url = entry.get('url', '')
                 video_id = entry.get('id') # ytsearch usually provides ID
@@ -446,10 +476,11 @@ class Music(commands.Cog):
                 # Add button
                 view.add_item(SearchButton(title, url, is_cached, self, interaction.user))
 
-            await interaction.followup.send("Select a track:", view=view)
+            # Edit the scanning message to show the menu
+            await scan_msg.edit(content="Select a track:", view=view)
 
         except Exception as e:
-            await interaction.followup.send(f"Error searching: {e}")
+            await scan_msg.edit(content=f"Error searching: {e}")
     @app_commands.command(name="skip", description="Skips the song")
     async def skip(self, interaction: discord.Interaction):
         """Skip the song."""
