@@ -9,20 +9,6 @@ import yt_dlp
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-# Bot setup
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
-
-# YouTube DL options
-ytdl_format_options = {
-    'format': 'bestaudio/best',
-    # Reconnect options to handle unstable connections
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
-}
-
-ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
-
 class YTDLSource(discord.PCMVolumeTransformer):
     def __init__(self, source, *, data, volume=0.5):
         super().__init__(source, volume)
