@@ -349,27 +349,48 @@ class Music(commands.Cog):
                     print(f"Failed to load cache for {video_id}: {e}")
 
         # Send status message (if not already sent by search menu, but here we assume fresh interaction or followup)
+        status_msg = None
         
         if is_cache_hit and cached_data:
             msg = flavor_texts["cache"].format(query=cached_data.get('title', query))
             data = cached_data
+            if not interaction.response.is_done():
+                await interaction.response.send_message(msg)
+            else:
+                await interaction.followup.send(msg)
         else:
-            msg = flavor_texts["download"].format(query=query)
+            # We don't have metadata yet, so we don't know if the audio file exists (legacy cache)
+            # Send a neutral processing message
+            processing_msg = f"📡 **Establishing Connection...** Accessing `{query}`..."
+            if not interaction.response.is_done():
+                await interaction.response.send_message(processing_msg)
+                status_msg = await interaction.original_response()
+            else:
+                status_msg = await interaction.followup.send(processing_msg)
+
             # Fetch info
             try:
                 data = await YTDLSource.get_info(query, loop=self.bot.loop, stream=True)
             except Exception as e:
-                if not interaction.response.is_done():
+                if status_msg:
+                     await status_msg.edit(content=f"Error finding song: {e}")
+                elif not interaction.response.is_done():
                     await interaction.response.send_message(f"Error finding song: {e}")
-                else:
-                    await interaction.followup.send(f"Error finding song: {e}")
                 return
-
-        # Send the flavor message
-        if not interaction.response.is_done():
-            await interaction.response.send_message(msg)
-        else:
-            await interaction.followup.send(msg)
+            
+            # Now check if audio file exists (Legacy Cache Check)
+            filename = ytdl.prepare_filename(data)
+            if os.path.exists(filename):
+                is_cache_hit = True
+                # Update message to Cache Hit
+                new_msg = flavor_texts["cache"].format(query=data.get('title', query))
+                if status_msg:
+                    await status_msg.edit(content=new_msg)
+            else:
+                # Update message to Downloading
+                new_msg = flavor_texts["download"].format(query=data.get('title', query))
+                if status_msg:
+                    await status_msg.edit(content=new_msg)
 
         try:
             player = self.get_player(interaction)
