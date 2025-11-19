@@ -51,6 +51,9 @@ ytdl_format_options = {
     },
     'js_runtimes': {
         'node': {}
+    },
+    'remote_components': {
+        'ejs': 'github'
     }
 }
 
