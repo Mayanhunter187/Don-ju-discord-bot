@@ -54,6 +54,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.uploader = data.get('uploader')
         self.requested_by = data.get('requested_by')
         self.is_cached = is_cached
+        self.webpage_url = data.get('webpage_url')
 
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=False):
@@ -152,7 +153,7 @@ class MusicPlayer:
                 self.guild.voice_client.play(source, after=lambda _: self.bot.loop.call_soon_threadsafe(self.next.set))
                 
                 # Create Embed for Now Playing
-                embed = discord.Embed(title="Now Playing", description=f"[{source.title}]({source.url})", color=discord.Color.blurple())
+                embed = discord.Embed(title="Now Playing", description=f"[{source.title}]({source.webpage_url})", color=discord.Color.blurple())
                 if source.thumbnail:
                     embed.set_thumbnail(url=source.thumbnail)
                 if source.duration:
