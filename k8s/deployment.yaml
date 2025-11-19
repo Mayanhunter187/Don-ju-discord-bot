@@ -18,9 +18,9 @@ spec:
     spec:
       containers:
       - name: discord-music-bot
-        # Replace with your actual image
-        image: your-docker-username/discord-music-bot:latest
-        imagePullPolicy: Always
+        # Use local image built on server
+        image: discord-music-bot:local
+        imagePullPolicy: Never
         env:
         - name: DISCORD_TOKEN
           valueFrom:
