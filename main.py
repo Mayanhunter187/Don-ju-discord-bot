@@ -9,6 +9,14 @@ import yt_dlp
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
+# Debug: Check environment and node availability
+import shutil
+# Explicitly add common paths to PATH to ensure node is found
+os.environ['PATH'] = os.environ.get('PATH', '') + ':/usr/bin:/usr/local/bin'
+print(f"DEBUG: PATH={os.environ.get('PATH')}", flush=True)
+print(f"DEBUG: node path={shutil.which('node')}", flush=True)
+print(f"DEBUG: nodejs path={shutil.which('nodejs')}", flush=True)
+
 # Bot setup
 intents = discord.Intents.default()
 intents.message_content = True
@@ -37,13 +45,7 @@ ytdl_format_options = {
 }
 
 # Debug: Check environment and node availability
-# Debug: Check environment and node availability
-import shutil
-# Explicitly add common paths to PATH to ensure node is found
-os.environ['PATH'] = os.environ.get('PATH', '') + ':/usr/bin:/usr/local/bin'
-print(f"DEBUG: PATH={os.environ.get('PATH')}")
-print(f"DEBUG: node path={shutil.which('node')}")
-print(f"DEBUG: nodejs path={shutil.which('nodejs')}")
+
 
 ffmpeg_options = {
     'options': '-vn',
