@@ -281,46 +281,6 @@ class Music(commands.Cog):
             self.players[interaction.guild.id] = player
         return player
 
-    async def play_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-        if not current:
-            return []
-        
-        # Use ytsearch5 to get top 5 results, flat extraction for speed
-        if current.startswith(('http://', 'https://')):
-             # If it's a URL, don't search, just return it as an option
-             return [app_commands.Choice(name=current[:100], value=current)]
-
-        query = f"ytsearch5:{current}"
-        
-        # We need to run this in an executor because extract_info is blocking
-        # and we don't want to freeze the bot during autocomplete
-        try:
-            data = await self.bot.loop.run_in_executor(
-                None, 
-                lambda: ytdl.extract_info(query, download=False, process=False)
-            )
-            
-            choices = []
-            if 'entries' in data:
-                for entry in data['entries']:
-                    # entry is a dict with 'title', 'url', etc.
-                    # Note: process=False means we might get raw objects, but usually for ytsearch it returns a playlist dict
-                    # If process=False, entries might be objects we need to resolve, but for ytsearch it usually gives minimal info.
-                    # Let's try to be safe.
-                    title = entry.get('title', 'Unknown Title')
-                    url = entry.get('url', '')
-                    
-                    # Discord limits choice names to 100 chars
-                    if len(title) > 100:
-                        title = title[:97] + "..."
-                        
-                    if url:
-                        choices.append(app_commands.Choice(name=title, value=url))
-            
-            return choices
-        except Exception:
-            # Autocomplete must not crash
-            return []
 
     async def queue_song(self, interaction: discord.Interaction, query: str):
         """Helper to queue a song from URL."""
@@ -417,7 +377,10 @@ class Music(commands.Cog):
             else:
                 embed.set_footer(text="☁️ New Download")
 
-            await interaction.followup.send(embed=embed)
+            if status_msg:
+                await status_msg.edit(content=None, embed=embed)
+            else:
+                await interaction.followup.send(embed=embed)
             
         except ValueError as e:
              await interaction.followup.send(f"{e}")
@@ -426,12 +389,11 @@ class Music(commands.Cog):
 
     @app_commands.command(name="play", description="Plays a song from YouTube")
     @app_commands.describe(search="The YouTube URL or search query")
-    @app_commands.autocomplete(search=play_autocomplete)
     async def play(self, interaction: discord.Interaction, search: str):
         """Plays a song."""
         # Defer immediately so we have time to process
         try:
-            await interaction.response.defer()
+            await interaction.response.defer(ephemeral=True)
         except discord.HTTPException as e:
             # If interaction is already acknowledged, we can proceed
             if e.code == 40060:
