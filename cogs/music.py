@@ -3,11 +3,12 @@ from discord import app_commands
 from discord.ext import commands
 import asyncio
 import yt_dlp
+import os
 
 # YouTube DL options
 ytdl_format_options = {
     'format': 'bestaudio/best',
-    'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
+    'outtmpl': 'songs/%(extractor)s-%(id)s-%(title)s.%(ext)s',
     'restrictfilenames': True,
     'noplaylist': True,
     'nocheckcertificate': True,
@@ -313,4 +314,6 @@ class Music(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
 async def setup(bot):
+    if not os.path.exists('songs'):
+        os.makedirs('songs')
     await bot.add_cog(Music(bot))
