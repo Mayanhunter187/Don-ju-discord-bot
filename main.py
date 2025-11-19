@@ -38,6 +38,19 @@ async def on_ready():
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} command(s) globally")
     except Exception as e:
+        print(f"Failed to sync commands: {e}")
+
+async def load_extensions():
+    for filename in os.listdir('./cogs'):
+        if filename.endswith('.py'):
+            try:
+                await bot.load_extension(f'cogs.{filename[:-3]}')
+                print(f'Loaded extension: cogs.{filename[:-3]}')
+            except Exception as e:
+                print(f'Failed to load extension cogs.{filename[:-3]}: {e}')
+
+if __name__ == "__main__":
+    if not TOKEN:
         print("Error: DISCORD_TOKEN not found in .env file.")
     else:
         bot.run(TOKEN)
