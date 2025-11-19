@@ -31,10 +31,16 @@ ytdl_format_options = {
     'verbose': True,
     'extractor_args': {
         'youtube': {
-            'player_client': ['android_creator']
+            'player_client': ['tv']
         }
     }
 }
+
+# Debug: Check environment and node availability
+import shutil
+print(f"DEBUG: PATH={os.environ.get('PATH')}")
+print(f"DEBUG: node path={shutil.which('node')}")
+print(f"DEBUG: nodejs path={shutil.which('nodejs')}")
 
 ffmpeg_options = {
     'options': '-vn',
