@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discord-music-bot
+  labels:
+    app: discord-music-bot
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: discord-music-bot
+  template:
+    metadata:
+      labels:
+        app: discord-music-bot
+    spec:
+      containers:
+      - name: discord-music-bot
+        # Replace with your actual image
+        image: your-docker-username/discord-music-bot:latest
+        imagePullPolicy: Always
+        env:
+        - name: DISCORD_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: discord-bot-secret
+              key: token
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
