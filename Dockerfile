@@ -8,12 +8,13 @@ COPY --from=mwader/static-ffmpeg:6.0 /ffprobe /usr/local/bin/
 # Set the working directory in the container
 WORKDIR /app
 
-# Install system dependencies (libsodium for voice, git for yt-dlp)
+# Install system dependencies (libsodium for voice, git for yt-dlp, nodejs for signature solving)
 # We use --no-install-recommends to avoid pulling in X11/GUI libraries
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsodium23 \
     libopus0 \
     git \
+    nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the current directory contents into the container at /app
