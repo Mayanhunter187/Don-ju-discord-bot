@@ -6,9 +6,10 @@ import yt_dlp
 import os
 
 # YouTube DL options
+# YouTube DL options
 ytdl_format_options = {
     'format': 'bestaudio/best',
-    'outtmpl': 'songs/%(extractor)s-%(id)s-%(title)s.%(ext)s',
+    'outtmpl': 'songs/%(id)s.%(ext)s',
     'restrictfilenames': True,
     'noplaylist': True,
     'nocheckcertificate': True,
@@ -31,10 +32,13 @@ ytdl_format_options = {
     'remote_components': ['ejs:github']
 }
 
-ffmpeg_options = {
+ffmpeg_options_stream = {
     'options': '-vn',
-    # Reconnect options to handle unstable connections
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
+}
+
+ffmpeg_options_local = {
+    'options': '-vn'
 }
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
@@ -45,6 +49,10 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.data = data
         self.title = data.get('title')
         self.url = data.get('url')
+        self.thumbnail = data.get('thumbnail')
+        self.duration = data.get('duration')
+        self.uploader = data.get('uploader')
+        self.requested_by = data.get('requested_by')
 
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=False):
@@ -52,7 +60,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         # Useful for the player loop if it encounters a raw string
         loop = loop or asyncio.get_event_loop()
         data = await cls.get_info(url, loop=loop, stream=stream)
-        return cls.create_from_data(data)
+        return cls.create_from_data(data, stream=stream)
 
     @classmethod
     async def get_info(cls, url, *, loop=None, stream=False):
@@ -72,7 +80,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
             raise ValueError(f"❌ **Song Too Long**: This video is {int(duration//60)}m {int(duration%60)}s, but the limit is 10 minutes. Please choose a shorter song.")
 
         filename = data['url'] if stream else ytdl.prepare_filename(data)
-        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+        options = ffmpeg_options_stream if stream else ffmpeg_options_local
+        return cls(discord.FFmpegPCMAudio(filename, **options), data=data)
 
 class MusicPlayer:
     def __init__(self, interaction):
@@ -138,7 +147,17 @@ class MusicPlayer:
 
             try:
                 self.guild.voice_client.play(source, after=lambda _: self.bot.loop.call_soon_threadsafe(self.next.set))
-                self.np = await self.channel.send(f'**Now Playing:** {source.title}')
+                
+                # Create Embed for Now Playing
+                embed = discord.Embed(title="Now Playing", description=f"[{source.title}]({source.url})", color=discord.Color.blurple())
+                if source.thumbnail:
+                    embed.set_thumbnail(url=source.thumbnail)
+                if source.duration:
+                    embed.add_field(name="Duration", value=f"{int(source.duration//60)}:{int(source.duration%60):02d}")
+                if source.requested_by:
+                    embed.set_footer(text=f"Requested by {source.requested_by}")
+                
+                self.np = await self.channel.send(embed=embed)
             except Exception as e:
                 await self.channel.send(f"Error starting playback: {e}")
                 self.next.set() # Ensure we don't get stuck
@@ -279,10 +298,19 @@ class Music(commands.Cog):
             if duration and duration > 600:
                 raise ValueError(f"❌ **Song Too Long**: This video is {int(duration//60)}m {int(duration%60)}s, but the limit is 10 minutes. Please choose a shorter song.")
             
+            # Add requester info
+            data['requested_by'] = interaction.user.name
+            
             await player.queue.put(data)
             
-            # Update with the result
-            await interaction.edit_original_response(content=f"Queued: **[{data['title']}]({data['webpage_url']})**")
+            # Update with the result (Embed)
+            embed = discord.Embed(title="Queued", description=f"[{data['title']}]({data['webpage_url']})", color=discord.Color.green())
+            if data.get('thumbnail'):
+                embed.set_thumbnail(url=data['thumbnail'])
+            if data.get('duration'):
+                embed.add_field(name="Duration", value=f"{int(data['duration']//60)}:{int(data['duration']%60):02d}")
+            
+            await interaction.edit_original_response(content=None, embed=embed)
             
         except ValueError as e:
              await interaction.edit_original_response(content=f"{e}")
