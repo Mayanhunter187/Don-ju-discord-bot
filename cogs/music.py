@@ -65,13 +65,13 @@ class YTDLSource(discord.PCMVolumeTransformer):
         return data
 
     @classmethod
-    def create_from_data(cls, data):
+    def create_from_data(cls, data, stream=False):
         # Max length check (10 minutes = 600 seconds)
         duration = data.get('duration')
         if duration and duration > 600:
-            raise ValueError(f"Song is too long ({duration}s). Max length is 10 minutes.")
+            raise ValueError(f"❌ **Song Too Long**: This video is {int(duration//60)}m {int(duration%60)}s, but the limit is 10 minutes. Please choose a shorter song.")
 
-        filename = data['url']
+        filename = data['url'] if stream else ytdl.prepare_filename(data)
         return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
 class MusicPlayer:
@@ -104,9 +104,19 @@ class MusicPlayer:
             if isinstance(source, dict):
                 # It's pre-fetched data
                 try:
-                    source = YTDLSource.create_from_data(source)
+                    # Check if we need to download (Cache Logic)
+                    filename = ytdl.prepare_filename(source)
+                    if not os.path.exists(filename):
+                        # Cleanup cache if needed
+                        self.bot.get_cog("Music").cleanup_cache()
+                        
+                        # Download
+                        await self.bot.loop.run_in_executor(None, lambda: ytdl.extract_info(source['webpage_url'], download=True))
+                    
+                    # Create source from local file (stream=False)
+                    source = YTDLSource.create_from_data(source, stream=False)
                 except ValueError as e:
-                    await self.channel.send(f"Skipping song: {e}")
+                    await self.channel.send(f"{e}")
                     continue
                 except Exception as e:
                     await self.channel.send(f'Error creating audio source: {e}')
@@ -116,7 +126,7 @@ class MusicPlayer:
                 try:
                     source = await YTDLSource.from_url(source, loop=self.bot.loop, stream=True)
                 except ValueError as e:
-                    await self.channel.send(f"Skipping song: {e}")
+                    await self.channel.send(f"{e}")
                     continue
                 except Exception as e:
                     await self.channel.send(f'There was an error processing your song.\n'
@@ -149,6 +159,37 @@ class Music(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.players = {}
+
+    def cleanup_cache(self):
+        cache_dir = 'songs'
+        max_size = 10 * 1024 * 1024 * 1024 # 10GB
+        
+        if not os.path.exists(cache_dir):
+            return
+
+        total_size = 0
+        files = []
+
+        for f in os.listdir(cache_dir):
+            path = os.path.join(cache_dir, f)
+            if os.path.isfile(path):
+                size = os.path.getsize(path)
+                total_size += size
+                files.append((path, os.path.getmtime(path), size))
+        
+        if total_size > max_size:
+            # Sort by modification time (oldest first)
+            files.sort(key=lambda x: x[1])
+            
+            for path, _, size in files:
+                try:
+                    os.remove(path)
+                    total_size -= size
+                    print(f"Deleted {path} to free space.")
+                    if total_size <= max_size:
+                        break
+                except Exception as e:
+                    print(f"Error deleting {path}: {e}")
 
     async def cleanup(self, guild):
         try:
@@ -236,7 +277,7 @@ class Music(commands.Cog):
             # Check duration before queueing
             duration = data.get('duration')
             if duration and duration > 600:
-                raise ValueError(f"Song is too long ({duration}s). Max length is 10 minutes.")
+                raise ValueError(f"❌ **Song Too Long**: This video is {int(duration//60)}m {int(duration%60)}s, but the limit is 10 minutes. Please choose a shorter song.")
             
             await player.queue.put(data)
             
@@ -244,7 +285,7 @@ class Music(commands.Cog):
             await interaction.edit_original_response(content=f"Queued: **[{data['title']}]({data['webpage_url']})**")
             
         except ValueError as e:
-             await interaction.edit_original_response(content=f"Error: {e}")
+             await interaction.edit_original_response(content=f"{e}")
         except Exception as e:
             await interaction.edit_original_response(content=f"Error finding song: {e}")
 
