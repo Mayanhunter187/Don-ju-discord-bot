@@ -286,6 +286,10 @@ class Music(commands.Cog):
             return []
         
         # Use ytsearch5 to get top 5 results, flat extraction for speed
+        if current.startswith(('http://', 'https://')):
+             # If it's a URL, don't search, just return it as an option
+             return [app_commands.Choice(name=current[:100], value=current)]
+
         query = f"ytsearch5:{current}"
         
         # We need to run this in an executor because extract_info is blocking
@@ -405,7 +409,14 @@ class Music(commands.Cog):
     async def play(self, interaction: discord.Interaction, search: str):
         """Plays a song."""
         # Defer immediately so we have time to process
-        await interaction.response.defer()
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException as e:
+            # If interaction is already acknowledged, we can proceed
+            if e.code == 40060:
+                pass
+            else:
+                raise
         
         player = self.get_player(interaction)
 
