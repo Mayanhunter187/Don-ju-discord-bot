@@ -31,7 +31,7 @@ ytdl_format_options = {
     'verbose': True,
     'extractor_args': {
         'youtube': {
-            'player_client': ['android']
+            'player_client': ['android_creator']
         }
     }
 }
