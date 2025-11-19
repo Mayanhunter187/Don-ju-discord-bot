@@ -169,8 +169,16 @@ class Music(commands.Cog):
                 await interaction.followup.send("You are not connected to a voice channel.")
                 return
 
+        # If not a URL, treat as a search query
+        if not search.startswith(('http://', 'https://')):
+            search = f'ytsearch:{search}'
+
         await player.queue.put(search)
-        await interaction.followup.send(f'Queued: {search}')
+        
+        # If it was a search, show the query. If URL, show URL.
+        # Note: We don't know the video title yet until it's processed.
+        display_search = search.replace('ytsearch:', '')
+        await interaction.followup.send(f'Queued: {display_search}')
 
     @app_commands.command(name="pause", description="Pauses the song")
     async def pause(self, interaction: discord.Interaction):
