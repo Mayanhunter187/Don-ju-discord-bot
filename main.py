@@ -3,19 +3,26 @@ from discord.ext import commands
 import os
 from dotenv import load_dotenv
 import asyncio
-import yt_dlp
+import shutil
+import subprocess
 
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 # Debug: Check environment and node availability
-import shutil
 # Explicitly add common paths to PATH to ensure node is found
 os.environ['PATH'] = os.environ.get('PATH', '') + ':/usr/bin:/usr/local/bin'
 print(f"DEBUG: PATH={os.environ.get('PATH')}", flush=True)
 print(f"DEBUG: node path={shutil.which('node')}", flush=True)
-print(f"DEBUG: nodejs path={shutil.which('nodejs')}", flush=True)
+try:
+    node_version = subprocess.check_output(['node', '-v'], stderr=subprocess.STDOUT).decode().strip()
+    print(f"DEBUG: node version={node_version}", flush=True)
+except Exception as e:
+    print(f"DEBUG: node execution failed: {e}", flush=True)
+
+# Import yt_dlp AFTER setting PATH to ensure it sees the update
+import yt_dlp
 
 # Bot setup
 intents = discord.Intents.default()
