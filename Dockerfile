@@ -8,13 +8,15 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libsodium23 \
+    libopus0 \
+    git \ 
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the current directory contents into the container at /app
 COPY . /app
 
 # Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
 # Run main.py when the container launches
 CMD ["python", "main.py"]
