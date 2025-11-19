@@ -20,37 +20,42 @@ try:
 except Exception as e:
     print(f"DEBUG: node execution failed: {e}", flush=True)
 
-# Bot setup
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+class MusicBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(command_prefix='!', intents=intents)
 
-@bot.event
-async def on_ready():
-    print(f'Logged in as {bot.user} (ID: {bot.user.id})')
-    print('------')
-    
-    # Load extensions
-    await load_extensions()
-    
-    # Sync commands globally
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} command(s) globally")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
+    async def setup_hook(self):
+        # Load extensions
+        print(f"Current working directory: {os.getcwd()}", flush=True)
+        if os.path.exists('./cogs'):
+            print(f"Contents of ./cogs: {os.listdir('./cogs')}", flush=True)
+            for filename in os.listdir('./cogs'):
+                if filename.endswith('.py'):
+                    try:
+                        await self.load_extension(f'cogs.{filename[:-3]}')
+                        print(f'Loaded extension: cogs.{filename[:-3]}', flush=True)
+                    except Exception as e:
+                        print(f'Failed to load extension cogs.{filename[:-3]}: {e}', flush=True)
+        else:
+            print("Error: ./cogs directory not found!", flush=True)
 
-async def load_extensions():
-    for filename in os.listdir('./cogs'):
-        if filename.endswith('.py'):
-            try:
-                await bot.load_extension(f'cogs.{filename[:-3]}')
-                print(f'Loaded extension: cogs.{filename[:-3]}')
-            except Exception as e:
-                print(f'Failed to load extension cogs.{filename[:-3]}: {e}')
+        # Sync commands globally
+        try:
+            synced = await self.tree.sync()
+            print(f"Synced {len(synced)} command(s) globally", flush=True)
+        except Exception as e:
+            print(f"Failed to sync commands: {e}", flush=True)
+
+    async def on_ready(self):
+        print(f'Logged in as {self.user} (ID: {self.user.id})', flush=True)
+        print('------', flush=True)
+
+bot = MusicBot()
 
 if __name__ == "__main__":
     if not TOKEN:
-        print("Error: DISCORD_TOKEN not found in .env file.")
+        print("Error: DISCORD_TOKEN not found in .env file.", flush=True)
     else:
         bot.run(TOKEN)
