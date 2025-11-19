@@ -65,6 +65,11 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
     @classmethod
     def create_from_data(cls, data):
+        # Max length check (10 minutes = 600 seconds)
+        duration = data.get('duration')
+        if duration and duration > 600:
+            raise ValueError(f"Song is too long ({duration}s). Max length is 10 minutes.")
+
         filename = data['url']
         return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
@@ -99,6 +104,9 @@ class MusicPlayer:
                 # It's pre-fetched data
                 try:
                     source = YTDLSource.create_from_data(source)
+                except ValueError as e:
+                    await self.channel.send(f"Skipping song: {e}")
+                    continue
                 except Exception as e:
                     await self.channel.send(f'Error creating audio source: {e}')
                     continue
@@ -106,6 +114,9 @@ class MusicPlayer:
                 # Source was probably a stream (not downloaded) and not a dict
                 try:
                     source = await YTDLSource.from_url(source, loop=self.bot.loop, stream=True)
+                except ValueError as e:
+                    await self.channel.send(f"Skipping song: {e}")
+                    continue
                 except Exception as e:
                     await self.channel.send(f'There was an error processing your song.\n'
                                             f'```css\n[{e}]\n```')
@@ -114,8 +125,12 @@ class MusicPlayer:
             source.volume = self.volume
             self.current = source
 
-            self.guild.voice_client.play(source, after=lambda _: self.bot.loop.call_soon_threadsafe(self.next.set))
-            self.np = await self.channel.send(f'**Now Playing:** {source.title}')
+            try:
+                self.guild.voice_client.play(source, after=lambda _: self.bot.loop.call_soon_threadsafe(self.next.set))
+                self.np = await self.channel.send(f'**Now Playing:** {source.title}')
+            except Exception as e:
+                await self.channel.send(f"Error starting playback: {e}")
+                self.next.set() # Ensure we don't get stuck
 
             await self.next.wait()
 
@@ -153,8 +168,46 @@ class Music(commands.Cog):
             self.players[interaction.guild.id] = player
         return player
 
+    async def play_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        if not current:
+            return []
+        
+        # Use ytsearch5 to get top 5 results, flat extraction for speed
+        query = f"ytsearch5:{current}"
+        
+        # We need to run this in an executor because extract_info is blocking
+        # and we don't want to freeze the bot during autocomplete
+        try:
+            data = await self.bot.loop.run_in_executor(
+                None, 
+                lambda: ytdl.extract_info(query, download=False, process=False)
+            )
+            
+            choices = []
+            if 'entries' in data:
+                for entry in data['entries']:
+                    # entry is a dict with 'title', 'url', etc.
+                    # Note: process=False means we might get raw objects, but usually for ytsearch it returns a playlist dict
+                    # If process=False, entries might be objects we need to resolve, but for ytsearch it usually gives minimal info.
+                    # Let's try to be safe.
+                    title = entry.get('title', 'Unknown Title')
+                    url = entry.get('url', '')
+                    
+                    # Discord limits choice names to 100 chars
+                    if len(title) > 100:
+                        title = title[:97] + "..."
+                        
+                    if url:
+                        choices.append(app_commands.Choice(name=title, value=url))
+            
+            return choices
+        except Exception:
+            # Autocomplete must not crash
+            return []
+
     @app_commands.command(name="play", description="Plays a song from YouTube")
     @app_commands.describe(search="The YouTube URL or search query")
+    @app_commands.autocomplete(search=play_autocomplete)
     async def play(self, interaction: discord.Interaction, search: str):
         """Plays a song."""
         await interaction.response.defer() # Defer interaction
@@ -179,11 +232,18 @@ class Music(commands.Cog):
             # Extract info immediately
             data = await YTDLSource.get_info(search, loop=self.bot.loop, stream=True)
             
+            # Check duration before queueing
+            duration = data.get('duration')
+            if duration and duration > 600:
+                raise ValueError(f"Song is too long ({duration}s). Max length is 10 minutes.")
+            
             await player.queue.put(data)
             
             # Update with the result
             await interaction.edit_original_response(content=f"Queued: **[{data['title']}]({data['webpage_url']})**")
             
+        except ValueError as e:
+             await interaction.edit_original_response(content=f"Error: {e}")
         except Exception as e:
             await interaction.edit_original_response(content=f"Error finding song: {e}")
 
