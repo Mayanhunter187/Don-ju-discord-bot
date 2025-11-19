@@ -18,7 +18,6 @@ spec:
     spec:
       containers:
       - name: discord-music-bot
-        # Use local image built on server
         image: discord-music-bot:local
         imagePullPolicy: Never
         env:
@@ -27,6 +26,15 @@ spec:
             secretKeyRef:
               name: discord-bot-secret
               key: token
+        
+        # --- ADD THIS SECTION (1/2): Mount the file ---
+        volumeMounts:
+        - name: cookie-volume
+          mountPath: "/app/cookies.txt"
+          subPath: "cookies.txt"
+          readOnly: true
+        # ----------------------------------------------
+
         resources:
           limits:
             memory: "512Mi"
@@ -34,3 +42,10 @@ spec:
           requests:
             memory: "256Mi"
             cpu: "250m"
+
+      # --- ADD THIS SECTION (2/2): Define the volume ---
+      volumes:
+      - name: cookie-volume
+        secret:
+          secretName: youtube-cookies
+      # -------------------------------------------------

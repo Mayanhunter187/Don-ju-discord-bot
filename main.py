@@ -26,6 +26,7 @@ ytdl_format_options = {
     'quiet': True,
     'no_warnings': True,
     'default_search': 'auto',
+    'cookiefile': '/app/cookies.txt',
     'source_address': '0.0.0.0'
 }
 
