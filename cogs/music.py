@@ -209,9 +209,15 @@ class MusicPlayer:
 
 class SearchButton(ui.Button):
     def __init__(self, title, url, is_cached, cog, interaction_user):
-        # Truncate title for button label (max 80 chars, keep it safe at 40)
-        label = title[:37] + "..." if len(title) > 37 else title
-        style = discord.ButtonStyle.green if is_cached else discord.ButtonStyle.blurple
+        # Button labels can be max 80 chars, truncate smartly
+        # Format: "Song Title Here..."
+        if len(title) > 77:
+            label = title[:74] + "..."
+        else:
+            label = title
+        
+        # Use different colors for cached vs new
+        style = discord.ButtonStyle.green if is_cached else discord.ButtonStyle.gray
         emoji = "💾" if is_cached else "☁️"
         
         super().__init__(style=style, label=label, emoji=emoji)
@@ -519,13 +525,13 @@ class Music(commands.Cog):
         # If Search Query, show menu
         search_query = f"ytsearch5:{search}"
         
-        # Send initial scanning message with better formatting
+        # Send initial scanning message with yellow theme
         embed = discord.Embed(
             title="🔍 Searching YouTube",
-            description=f"Looking for: **{search}**",
-            color=discord.Color.blue()
+            description=f"Looking for: **{search}**\n\n⏳ Scanning the airwaves...",
+            color=discord.Color.gold()
         )
-        embed.set_footer(text="This may take a few seconds...")
+        embed.set_footer(text="This usually takes a few seconds")
         scan_msg = await interaction.followup.send(embed=embed)
 
         try:
