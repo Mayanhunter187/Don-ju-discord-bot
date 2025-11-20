@@ -364,23 +364,28 @@ class Music(commands.Cog):
             
             await player.queue.put(data)
             
-            # Public Log Message
-            queue_pos = player.queue.qsize()
-            await interaction.channel.send(f"🎵 **{data['title']}** added to queue by **{interaction.user.name}** (Position: #{queue_pos})")
-            
-            # Update with the result (Embed) - Private Confirmation
+            # Create Embed for Public Queue Log
             embed = discord.Embed(title="Queued", description=f"[{data['title']}]({data['webpage_url']})", color=discord.Color.green())
             if data.get('thumbnail'):
                 embed.set_thumbnail(url=data['thumbnail'])
             if data.get('duration'):
                 embed.add_field(name="Duration", value=f"{int(data['duration']//60)}:{int(data['duration']%60):02d}")
             
+            # Add position info
+            queue_pos = player.queue.qsize()
+            embed.add_field(name="Position in Queue", value=f"#{queue_pos}", inline=True)
+            embed.add_field(name="Requested By", value=interaction.user.mention, inline=True)
+
             if is_cache_hit:
                 embed.set_footer(text="💾 Instant Load (Cached)")
             else:
                 embed.set_footer(text="☁️ New Download")
 
-            await interaction.edit_original_response(content=None, embed=embed)
+            # Send Public Embed
+            await interaction.channel.send(embed=embed)
+
+            # Close Ephemeral Interaction
+            await interaction.edit_original_response(content="✅ Request sent to queue!", embed=None, view=None)
             
         except ValueError as e:
              await interaction.edit_original_response(content=f"{e}")
