@@ -149,56 +149,6 @@ class MusicPlayer:
                 except Exception as e:
                     await self.channel.send(f'There was an error processing your song.\n'
                                             f'```css\n[{e}]\n```')
-                    continue
-
-            source.volume = self.volume
-            self.current = source
-
-            try:
-                self.guild.voice_client.play(source, after=lambda _: self.bot.loop.call_soon_threadsafe(self.next.set))
-                
-                # Create Embed for Now Playing
-                embed = discord.Embed(title="Now Playing", description=f"[{source.title}]({source.webpage_url})", color=discord.Color.blurple())
-                if source.thumbnail:
-                    embed.set_thumbnail(url=source.thumbnail)
-                if source.duration:
-                    embed.add_field(name="Duration", value=f"{int(source.duration//60)}:{int(source.duration%60):02d}")
-                if source.requested_by:
-                    embed.set_footer(text=f"Requested by {source.requested_by}")
-                
-                # Add Cache Status
-                if source.is_cached:
-                    embed.add_field(name="Source", value="💾 Played from Cache", inline=True)
-                else:
-                    embed.add_field(name="Source", value="☁️ Downloaded from YouTube", inline=True)
-                
-                self.np = await self.channel.send(embed=embed)
-            except Exception as e:
-                await self.channel.send(f"Error starting playback: {e}")
-                self.next.set() # Ensure we don't get stuck
-
-            await self.next.wait()
-
-            # Make sure the FFmpeg process is cleaned up.
-            source.cleanup()
-            self.current = None
-
-    def destroy(self, guild):
-        # Cleanup via the Cog
-        cog = self.bot.get_cog("Music")
-        if cog:
-            return self.bot.loop.create_task(cog.cleanup(guild))
-
-class SearchButton(ui.Button):
-    def __init__(self, title, url, is_cached, cog, interaction_user):
-        # Truncate title for button label (max 80 chars, keep it safe at 40)
-        label = title[:37] + "..." if len(title) > 37 else title
-        style = discord.ButtonStyle.green if is_cached else discord.ButtonStyle.blurple
-        emoji = "💾" if is_cached else "☁️"
-        
-        super().__init__(style=style, label=label, emoji=emoji)
-        self.video_url = url
-        self.cog = cog
         self.interaction_user = interaction_user
 
     async def callback(self, interaction: discord.Interaction):
@@ -343,7 +293,7 @@ class Music(commands.Cog):
             # Check duration before queueing
             duration = data.get('duration')
             if duration and duration > 600:
-                raise ValueError(f"❌ **Song Too Long**: This video is {int(duration//60)}m {int(duration%60)}s, but the limit is 10 minutes. Please choose a shorter song.")
+                raise ValueError(f"❌ **Song Too Long**: This video is {int(duration//60)}m {int(duration%60):02d}s, but the limit is 10 minutes. Please choose a shorter song.")
             
             # Add requester info
             data['requested_by'] = interaction.user.name
@@ -443,6 +393,7 @@ class Music(commands.Cog):
     @app_commands.command(name="skip", description="Skips the song")
     async def skip(self, interaction: discord.Interaction):
         """Skip the song."""
+        print(f"DEBUG: Skip requested by {interaction.user}", flush=True)
         vc = interaction.guild.voice_client
         if not vc or not vc.is_connected():
             return await interaction.response.send_message('I am not currently playing anything!', ephemeral=True)
@@ -450,8 +401,10 @@ class Music(commands.Cog):
         if vc.is_paused():
             pass
         elif not vc.is_playing():
-            return
+            print("DEBUG: Skip called but not playing", flush=True)
+            return await interaction.response.send_message('I am not playing anything to skip!', ephemeral=True)
 
+        print("DEBUG: Calling vc.stop()", flush=True)
         vc.stop()
         await interaction.response.send_message(f'**`{interaction.user}`**: Skipped the song!')
 
