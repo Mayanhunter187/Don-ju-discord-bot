@@ -786,15 +786,17 @@ class Music(commands.Cog):
         if not player.queue._queue:
             empty_embed = discord.Embed(
                 title="📭 Queue is Empty",
-                description="No songs are currently queued. Use `/play` to add some!",
+                description="No songs are currently queued.\n\n💡 Use `/play` to add some tracks!",
                 color=discord.Color.light_gray()
             )
             return await interaction.response.send_message(embed=empty_embed)
 
         upcoming = list(player.queue._queue)
         
-        # Build formatted queue list
+        # Build formatted queue list with better presentation
         fmt = ""
+        total_duration = 0
+        
         for i, song in enumerate(upcoming):
             # Handle both dict (pre-download) and YTDLSource (legacy)
             if isinstance(song, dict):
@@ -806,35 +808,45 @@ class Music(commands.Cog):
                 url = song.webpage_url
                 duration = song.duration
             
-            # Format duration
-            duration_str = f"{int(duration//60)}:{int(duration%60):02d}" if duration else "?"
+            total_duration += duration
+            
+            # Format duration cleanly
+            mins = int(duration // 60)
+            secs = int(duration % 60)
+            duration_str = f"{mins}:{secs:02d}" if duration else "?"
             
             # Truncate long titles
-            display_title = title[:60] + "..." if len(title) > 60 else title
+            display_title = title[:45] + "..." if len(title) > 45 else title
             
-            line = f"`{i + 1}.` [{display_title}]({url}) `[{duration_str}]`\n"
+            # Clean numbered list with duration
+            line = f"`{i + 1}.` [{display_title}]({url}) • `{duration_str}`\n"
+            
             if len(fmt) + len(line) > 3800:  # Leave room for footer
-                fmt += f"\n*...and {len(upcoming) - i} more songs*"
+                fmt += f"\n*...and {len(upcoming) - i} more*"
                 break
             fmt += line
 
+        # Create modern queue embed
         embed = discord.Embed(
-            title=f'📜 Queue ({len(upcoming)} song{"s" if len(upcoming) != 1 else ""})',
-            description=fmt or "*Queue is empty*",
-            color=discord.Color.blurple()
+            title=f'📜 Queue — {len(upcoming)} Track{"s" if len(upcoming) != 1 else ""}',
+            description=fmt,
+            color=discord.Color.blue()
         )
         
-        # Calculate total duration
-        total_duration = 0
-        for song in upcoming:
-            if isinstance(song, dict):
-                total_duration += song.get('duration', 0)
-            else:
-                total_duration += song.duration if hasattr(song, 'duration') else 0
-        
+        # Format total duration nicely
         if total_duration > 0:
             total_mins = int(total_duration // 60)
-            embed.set_footer(text=f"Total Duration: {total_mins} minute{('s' if total_mins != 1 else '')}")
+            total_secs = int(total_duration % 60)
+            
+            # Convert to hours if needed
+            if total_mins >= 60:
+                hours = total_mins // 60
+                remaining_mins = total_mins % 60
+                time_str = f"{hours}h {remaining_mins}m"
+            else:
+                time_str = f"{total_mins}m {total_secs}s"
+            
+            embed.set_footer(text=f"⏱️ Total Duration: {time_str}")
         
         await interaction.response.send_message(embed=embed)
 
