@@ -247,12 +247,30 @@ class SearchView(ui.View):
         self.cog = cog
         self.interaction_user = interaction_user
 
-    @ui.button(label="Cancel", style=discord.ButtonStyle.red, emoji="✖️")
-    async def cancel(self, interaction: discord.Interaction, button: ui.Button):
+    @ui.button(label="Cancel", style=discord.ButtonStyle.red, emoji="❌")
+    async def cancel_button(self, interaction: discord.Interaction, button: ui.Button):
+        # Only the requester can cancel
         if interaction.user != self.interaction_user:
-            return await interaction.response.send_message("This search menu is not for you!", ephemeral=True)
+            return await interaction.response.send_message("❌ This search menu is not for you!", ephemeral=True)
         
-        await interaction.response.edit_message(content="Search cancelled.", view=None, embed=None)
+        # Acknowledge the interaction and delete the message
+        try:
+            await interaction.response.defer()
+            await interaction.delete_original_response()
+        except discord.NotFound:
+            # Message already deleted, that's fine
+            pass
+        except Exception as e:
+            # Fallback: just edit the message
+            try:
+                cancel_embed = discord.Embed(
+                    title="❌ Search Cancelled",
+                    description="Search has been cancelled.",
+                    color=discord.Color.red()
+                )
+                await interaction.response.send_message(embed=cancel_embed, ephemeral=True)
+            except:
+                pass
 
 class Music(commands.Cog):
     def __init__(self, bot):
@@ -641,26 +659,18 @@ class Music(commands.Cog):
                 # Add button
                 view.add_item(SearchButton(title, url, is_cached, self, interaction.user))
 
-            # Edit the scanning message to show modern results
+            # Edit the scanning message to show clean bubble list
             results_embed = discord.Embed(
-                title="🎵 Found Your Tracks!",
-                description=f"I found **{len(entries[:5])} songs** for: **{search}**\n\n✨ Click a button below to play",
+                title="🎵 Select a Track",
+                description="Choose from the options below:",
                 color=discord.Color.blue()
             )
             
-            # Add cache info with colors
-            cache_info = ""
-            if cached_count > 0:
-                cache_info += f"💾 **{cached_count}** cached (instant play)"
-            if new_count > 0:
-                if cache_info:
-                    cache_info += " • "
-                cache_info += f"☁️ **{new_count}** new"
+            # Optionally add thumbnail of first result for visual appeal
+            if entries and entries[0].get('thumbnail'):
+                results_embed.set_thumbnail(url=entries[0]['thumbnail'])
             
-            if cache_info:
-                results_embed.add_field(name="📊 Cache Status", value=cache_info, inline=False)
-            
-            results_embed.set_footer(text="🎵 Green = Cached | Blue = New Download")
+            results_embed.set_footer(text="🟢 Cached | 🔵 New")
             await scan_msg.edit(embed=results_embed, view=view)
 
         except Exception as e:
