@@ -166,20 +166,21 @@ class MusicPlayer:
 
                 self.guild.voice_client.play(source, after=after_callback)
                 
-                # Create Embed for Now Playing
-                embed = discord.Embed(title="Now Playing", description=f"[{source.title}]({source.webpage_url})", color=discord.Color.blurple())
+                # Create Embed for Now Playing (Purple, Large Image)
+                embed = discord.Embed(title="Now Playing", description=f"[{source.title}]({source.webpage_url})", color=discord.Color.purple())
                 if source.thumbnail:
-                    embed.set_thumbnail(url=source.thumbnail)
+                    embed.set_image(url=source.thumbnail)
                 if source.duration:
-                    embed.add_field(name="Duration", value=f"{int(source.duration//60)}:{int(source.duration%60):02d}")
-                if source.requested_by:
-                    embed.set_footer(text=f"Requested by {source.requested_by}")
+                    embed.add_field(name="Duration", value=f"{int(source.duration//60)}:{int(source.duration%60):02d}", inline=True)
                 
                 # Add Cache Status
                 if source.is_cached:
-                    embed.add_field(name="Source", value="💾 Played from Cache", inline=True)
+                    embed.add_field(name="Source", value="💾 Cached", inline=True)
                 else:
-                    embed.add_field(name="Source", value="☁️ Downloaded from YouTube", inline=True)
+                    embed.add_field(name="Source", value="☁️ New", inline=True)
+                
+                if source.requested_by:
+                    embed.add_field(name="Requested By", value=source.requested_by, inline=True)
                 
                 self.np = await self.channel.send(embed=embed)
             except Exception as e:
@@ -520,8 +521,14 @@ class Music(commands.Cog):
         # If Search Query, show menu
         search_query = f"ytsearch5:{search}"
         
-        # Send initial scanning message
-        scan_msg = await interaction.followup.send(f"🔎 **Scanning frequencies...** Searching for `{search}`...")
+        # Send initial scanning message with better formatting
+        embed = discord.Embed(
+            title="🔍 Searching YouTube",
+            description=f"Looking for: **{search}**",
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text="This may take a few seconds...")
+        scan_msg = await interaction.followup.send(embed=embed)
 
         try:
             data = await self.bot.loop.run_in_executor(
@@ -530,7 +537,12 @@ class Music(commands.Cog):
             )
             
             if 'entries' not in data or not data['entries']:
-                await scan_msg.edit(content="No results found.")
+                error_embed = discord.Embed(
+                    title="❌ No Results",
+                    description=f"Couldn't find anything for: **{search}**",
+                    color=discord.Color.red()
+                )
+                await scan_msg.edit(embed=error_embed)
                 return
 
             view = SearchView(self, interaction.user)
@@ -552,10 +564,22 @@ class Music(commands.Cog):
                 view.add_item(SearchButton(title, url, is_cached, self, interaction.user))
 
             # Edit the scanning message to show the menu
-            await scan_msg.edit(content="Select a track:", view=view)
+            results_embed = discord.Embed(
+                title="🎵 Search Results",
+                description="Select a track from the options below:",
+                color=discord.Color.green()
+            )
+            results_embed.set_footer(text=f"💾 = Cached | ☁️ = New Download")
+            await scan_msg.edit(embed=results_embed, view=view)
 
         except Exception as e:
-            await scan_msg.edit(content=f"Error searching: {e}")
+            error_embed = discord.Embed(
+                title="⚠️ Search Error",
+                description=f"Something went wrong while searching.",
+                color=discord.Color.orange()
+            )
+            error_embed.add_field(name="Error Details", value=f"```{str(e)[:200]}```", inline=False)
+            await scan_msg.edit(embed=error_embed)
     @app_commands.command(name="skip", description="Skips the song")
     async def skip(self, interaction: discord.Interaction):
         """Skip the song."""
@@ -593,28 +617,59 @@ class Music(commands.Cog):
             return await interaction.response.send_message('I am not currently connected to voice!', ephemeral=True)
 
         player = self.get_player(interaction)
-        if player.queue.empty():
-            return await interaction.response.send_message('There are currently no more queued songs.')
+        if not player.queue._queue:
+            empty_embed = discord.Embed(
+                title="📭 Queue is Empty",
+                description="No songs are currently queued. Use `/play` to add some!",
+                color=discord.Color.light_gray()
+            )
+            return await interaction.response.send_message(embed=empty_embed)
 
         upcoming = list(player.queue._queue)
         
+        # Build formatted queue list
         fmt = ""
         for i, song in enumerate(upcoming):
             # Handle both dict (pre-download) and YTDLSource (legacy)
             if isinstance(song, dict):
                 title = song.get('title', 'Unknown Title')
                 url = song.get('webpage_url', '')
+                duration = song.get('duration', 0)
             else:
                 title = song.title
                 url = song.webpage_url
+                duration = song.duration
             
-            line = f"**{i + 1}.** [{title}]({url})\n"
-            if len(fmt) + len(line) > 4000:
-                fmt += f"... and {len(upcoming) - i} more."
+            # Format duration
+            duration_str = f"{int(duration//60)}:{int(duration%60):02d}" if duration else "?"
+            
+            # Truncate long titles
+            display_title = title[:60] + "..." if len(title) > 60 else title
+            
+            line = f"`{i + 1}.` [{display_title}]({url}) `[{duration_str}]`\n"
+            if len(fmt) + len(line) > 3800:  # Leave room for footer
+                fmt += f"\n*...and {len(upcoming) - i} more songs*"
                 break
             fmt += line
 
-        embed = discord.Embed(title=f'Upcoming - Next {len(upcoming)}', description=fmt, color=discord.Color.blurple())
+        embed = discord.Embed(
+            title=f'📜 Queue ({len(upcoming)} song{"s" if len(upcoming) != 1 else ""})',
+            description=fmt or "*Queue is empty*",
+            color=discord.Color.blurple()
+        )
+        
+        # Calculate total duration
+        total_duration = 0
+        for song in upcoming:
+            if isinstance(song, dict):
+                total_duration += song.get('duration', 0)
+            else:
+                total_duration += song.duration if hasattr(song, 'duration') else 0
+        
+        if total_duration > 0:
+            total_mins = int(total_duration // 60)
+            embed.set_footer(text=f"Total Duration: {total_mins} minute{('s' if total_mins != 1 else '')}")
+        
         await interaction.response.send_message(embed=embed)
 
 async def setup(bot):
