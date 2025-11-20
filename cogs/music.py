@@ -79,14 +79,25 @@ class YTDLSource(discord.PCMVolumeTransformer):
         return data
 
     @classmethod
-    def create_from_data(cls, data, stream=False, is_cached=False):
+    def create_from_data(cls, data, stream=False, is_cached=False, seek_offset=0):
         # Max length check (10 minutes = 600 seconds)
         duration = data.get('duration')
         if duration and duration > 600:
             raise ValueError(f"❌ **Song Too Long**: This video is {int(duration//60)}m {int(duration%60)}s, but the limit is 10 minutes. Please choose a shorter song.")
 
         filename = data['url'] if stream else ytdl.prepare_filename(data)
-        options = ffmpeg_options_stream if stream else ffmpeg_options_local
+        options = ffmpeg_options_stream.copy() if stream else ffmpeg_options_local.copy()
+        
+        # Apply seek if resuming from a position
+        if seek_offset > 0:
+            before_opts = options.get('before_options', '')
+            if before_opts:
+                before_opts += f" -ss {int(seek_offset)}"
+            else:
+                before_opts = f"-ss {int(seek_offset)}"
+            options['before_options'] = before_opts
+            print(f"DEBUG: Applied seek offset {int(seek_offset)} seconds to FFmpeg options", flush=True)
+        
         return cls(discord.FFmpegPCMAudio(filename, **options), data=data, is_cached=is_cached)
 
 class MusicPlayer:
@@ -132,8 +143,12 @@ class MusicPlayer:
                         # Download
                         await self.bot.loop.run_in_executor(None, lambda: ytdl.extract_info(source['webpage_url'], download=True))
                     
-                    # Create source from local file (stream=False)
-                    source = YTDLSource.create_from_data(source, stream=False, is_cached=is_cached)
+                    # Create source from local file (stream=False), applying seek if resuming
+                    source = YTDLSource.create_from_data(source, stream=False, is_cached=is_cached, seek_offset=self.seek_position)
+                    # Reset seek position after applying
+                    if self.seek_position > 0:
+                        print(f"DEBUG: Resumed from {self.seek_position} seconds", flush=True)
+                        self.seek_position = 0
                 except ValueError as e:
                     await self.channel.send(f"{e}")
                     continue
