@@ -168,9 +168,6 @@ class MusicPlayer:
             # But we need to apply volume
             source.volume = self.volume
 
-            # Save state when song starts
-            self.bot.get_cog("Music").save_state()
-
             try:
                 print(f"DEBUG: Playing {source.title}", flush=True)
                 
@@ -184,6 +181,8 @@ class MusicPlayer:
                 self.playback_start_time = time.time()
                 
                 self.guild.voice_client.play(source, after=after_callback)
+                
+                # Save state AFTER playback has started (so playback_start_time is set)
                 
                 # Create Embed for Now Playing (Purple, Large Image)
                 embed = discord.Embed(title="Now Playing", description=f"[{source.title}]({source.webpage_url})", color=discord.Color.purple())
@@ -219,6 +218,15 @@ class MusicPlayer:
                     embed.set_footer(text=f"🔄 Resumed after bot restart at {mins}:{secs:02d}", icon_url=None)
                 
                 self.np = await self.channel.send(embed=embed)
+                
+                # Start periodic state saving (every 10 seconds during playback)
+                async def periodic_save():
+                    await asyncio.sleep(10)  # Wait 10 seconds before first save
+                    while self.guild.voice_client and self.guild.voice_client.is_playing():
+                        self.bot.get_cog("Music").save_state()
+                        await asyncio.sleep(10)  # Save every 10 seconds
+                
+                self.bot.loop.create_task(periodic_save())
             except Exception as e:
                 print(f"DEBUG: Exception in play: {e}", flush=True)
                 await self.channel.send(f"Error starting playback: {e}")
@@ -626,9 +634,40 @@ class Music(commands.Cog):
              await interaction.edit_original_response(content=f"An error occurred: {e}")
 
     @app_commands.command(name="play", description="Plays a song from YouTube")
-    @app_commands.describe(search="The YouTube URL or search query")
+    @app_commands.describe(search="The YouTube URL or search query (use 'random' for a random cached song)")
     async def play(self, interaction: discord.Interaction, search: str):
         """Plays a song."""
+        # Check if user is in voice channel first
+        if not interaction.user.voice:
+            return await interaction.response.send_message('❌ You need to be in a voice channel to play music!', ephemeral=True)
+        
+        # Handle "random" keyword - play random cached song
+        if search.lower() == 'random':
+            if not os.path.exists('songs'):
+                return await interaction.response.send_message('❌ No cached songs available!', ephemeral=True)
+            
+            # Get all cached audio files with their info
+            cached_songs = []
+            for filename in os.listdir('songs'):
+                if not filename.endswith(('.json', '.part', '.ytdl', '.temp')):
+                    video_id = filename.rsplit('.', 1)[0]
+                    info_path = os.path.join('songs', f'{video_id}.info.json')
+                    
+                    if os.path.exists(info_path):
+                        try:
+                            with open(info_path, 'r') as f:
+                                info = json.load(f)
+                                cached_songs.append(info['webpage_url'])
+                        except:
+                            pass
+            
+            if not cached_songs:
+                return await interaction.response.send_message('❌ No cached songs available!', ephemeral=True)
+            
+            # Pick random song and notify
+            search = random.choice(cached_songs)
+            # Continue with normal flow using the random URL
+        
         # Determine visibility based on input type
         is_url = search.startswith(('http://', 'https://'))
         
@@ -971,6 +1010,7 @@ class Music(commands.Cog):
         
         await interaction.response.send_message(embed=embed)
 
+
     @app_commands.command(name="cache", description="Shows cache statistics")
     async def cache_info(self, interaction: discord.Interaction):
         """Display cache statistics."""
@@ -1005,7 +1045,7 @@ class Music(commands.Cog):
                         except:
                             pass  # Use filename if JSON reading fails
                     
-                    audio_files.append((friendly_name, file_size))
+                    audio_files.append((friendly_name, file_size, video_id))
         
         # Format size
         if total_size >= 1_073_741_824:  # >= 1 GB
@@ -1026,11 +1066,26 @@ class Music(commands.Cog):
         if audio_files:
             audio_files.sort(key=lambda x: x[1], reverse=True)
             top_files = ""
-            for i, (song_title, size) in enumerate(audio_files[:5], 1):
+            for i, (song_title, size, video_id) in enumerate(audio_files[:5], 1):
+                # Get duration from info file
+                info_path = os.path.join('songs', f'{video_id}.info.json')
+                duration_str = "?"
+                if os.path.exists(info_path):
+                    try:
+                        with open(info_path, 'r') as f:
+                            info = json.load(f)
+                            duration = info.get('duration', 0)
+                            if duration:
+                                mins = int(duration // 60)
+                                secs = int(duration % 60)
+                                duration_str = f"{mins}:{secs:02d}"
+                    except:
+                        pass
+                
                 # Truncate long titles
-                display_name = song_title[:50] + "..." if len(song_title) > 50 else song_title
+                display_name = song_title[:40] + "..." if len(song_title) > 40 else song_title
                 file_mb = size / 1_048_576
-                top_files += f"`{i}.` {display_name} • {file_mb:.1f} MB\n"
+                top_files += f"`{i}.` {display_name} • `{duration_str}` • {file_mb:.1f} MB\n"
             
             if top_files:
                 embed.add_field(name="📊 Largest Files", value=top_files, inline=False)
