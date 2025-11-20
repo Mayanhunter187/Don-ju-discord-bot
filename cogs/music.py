@@ -453,27 +453,33 @@ class Music(commands.Cog):
             # Add requester info
             data['requested_by'] = interaction.user.name
             
+            # Check if this will play immediately or be queued
+            vc = interaction.guild.voice_client
+            will_play_immediately = (player.queue.empty() and (not vc or not vc.is_playing()))
+            
             await player.queue.put(data)
             
-            # Create Embed for Public Queue Log
-            embed = discord.Embed(title="Queued", description=f"[{data['title']}]({data['webpage_url']})", color=discord.Color.green())
-            if data.get('thumbnail'):
-                embed.set_image(url=data['thumbnail'])
-            if data.get('duration'):
-                embed.add_field(name="Duration", value=f"{int(data['duration']//60)}:{int(data['duration']%60):02d}")
-            
-            # Add position info
-            queue_pos = player.queue.qsize()
-            embed.add_field(name="Position in Queue", value=f"#{queue_pos}", inline=True)
-            embed.add_field(name="Requested By", value=interaction.user.mention, inline=True)
+            # Only show "Queued" message if song won't play immediately
+            if not will_play_immediately:
+                # Create Embed for Public Queue Log
+                embed = discord.Embed(title="Queued", description=f"[{data['title']}]({data['webpage_url']})", color=discord.Color.green())
+                if data.get('thumbnail'):
+                    embed.set_image(url=data['thumbnail'])
+                if data.get('duration'):
+                    embed.add_field(name="Duration", value=f"{int(data['duration']//60)}:{int(data['duration']%60):02d}")
+                
+                # Add position info
+                queue_pos = player.queue.qsize()
+                embed.add_field(name="Position in Queue", value=f"#{queue_pos}", inline=True)
+                embed.add_field(name="Requested By", value=interaction.user.mention, inline=True)
 
-            if is_cache_hit:
-                embed.set_footer(text="💾 Instant Load (Cached)")
-            else:
-                embed.set_footer(text="☁️ New Download")
+                if is_cache_hit:
+                    embed.set_footer(text="💾 Instant Load (Cached)")
+                else:
+                    embed.set_footer(text="☁️ New Download")
 
-            # Send Public Embed
-            await interaction.channel.send(embed=embed)
+                # Send Public Embed
+                await interaction.channel.send(embed=embed)
 
             # Close Ephemeral Interaction (Delete it so it vanishes)
             try:
@@ -512,9 +518,16 @@ class Music(commands.Cog):
 
         if interaction.guild.voice_client is None:
             if interaction.user.voice:
+                # Send modern connection message
+                connecting_embed = discord.Embed(
+                    title="🔗 Connecting to Voice",
+                    description=f"Joining **{interaction.user.voice.channel.name}**...",
+                    color=discord.Color.blue()
+                )
+                await interaction.followup.send(embed=connecting_embed, ephemeral=True)
                 await interaction.user.voice.channel.connect()
             else:
-                await interaction.followup.send("You are not connected to a voice channel.")
+                await interaction.followup.send("❌ You need to be in a voice channel to play music!")
                 return
 
         # If URL, queue directly
@@ -544,8 +557,8 @@ class Music(commands.Cog):
             
             if 'entries' not in data or not data['entries']:
                 error_embed = discord.Embed(
-                    title="❌ No Results",
-                    description=f"Couldn't find anything for: **{search}**",
+                    title="❌ No Results Found",
+                    description=f"Couldn't find anything for: **{search}**\n\n💡 Try a different search term!",
                     color=discord.Color.red()
                 )
                 await scan_msg.edit(embed=error_embed)
@@ -595,10 +608,10 @@ class Music(commands.Cog):
         except Exception as e:
             error_embed = discord.Embed(
                 title="⚠️ Search Error",
-                description=f"Something went wrong while searching.",
+                description=f"Something went wrong while searching.\n\n💡 Try again in a moment!",
                 color=discord.Color.orange()
             )
-            error_embed.add_field(name="Error Details", value=f"```{str(e)[:200]}```", inline=False)
+            error_embed.add_field(name="🔍 Error Details", value=f"```{str(e)[:200]}```", inline=False)
             await scan_msg.edit(embed=error_embed)
     @app_commands.command(name="skip", description="Skips the song")
     async def skip(self, interaction: discord.Interaction):
@@ -606,38 +619,57 @@ class Music(commands.Cog):
         print(f"DEBUG: Skip requested by {interaction.user}", flush=True)
         vc = interaction.guild.voice_client
         if not vc or not vc.is_connected():
-            return await interaction.response.send_message('I am not currently playing anything!', ephemeral=True)
+            return await interaction.response.send_message('❌ I\'m not currently playing anything!', ephemeral=True)
 
         if vc.is_paused():
             pass
         elif not vc.is_playing():
             print("DEBUG: Skip called but not playing", flush=True)
-            return await interaction.response.send_message('I am not playing anything to skip!', ephemeral=True)
+            return await interaction.response.send_message('❌ Nothing is playing right now!', ephemeral=True)
 
         # Get player and current song info
         player = self.get_player(interaction)
         current_song = player.current
         queue_size = player.queue.qsize()
         
-        # Get song title
+        # Get song details
         if current_song:
             if isinstance(current_song, YTDLSource):
                 song_title = current_song.title
+                song_url = current_song.webpage_url
+                song_thumbnail = current_song.thumbnail
+                song_duration = current_song.duration
             else:
                 song_title = "Unknown"
+                song_url = None
+                song_thumbnail = None
+                song_duration = None
         else:
             song_title = "Unknown"
+            song_url = None
+            song_thumbnail = None
+            song_duration = None
 
         print("DEBUG: Calling vc.stop()", flush=True)
         vc.stop()
         self.save_state()
         
-        # Send enhanced skip embed with details
+        # Send enhanced skip embed with thumbnail and details
         embed = discord.Embed(
             title="⏭️ Song Skipped",
-            description=f"**{song_title}**",
+            description=f"**{song_title}**" if not song_url else f"**[{song_title}]({song_url})**",
             color=discord.Color.orange()
         )
+        
+        # Add thumbnail
+        if song_thumbnail:
+            embed.set_thumbnail(url=song_thumbnail)
+        
+        # Add duration if available
+        if song_duration:
+            duration_str = f"{int(song_duration//60)}:{int(song_duration%60):02d}"
+            embed.add_field(name="⏱️ Duration", value=duration_str, inline=True)
+        
         embed.add_field(name="👤 Skipped By", value=interaction.user.mention, inline=True)
         embed.add_field(name="📋 Songs in Queue", value=f"{queue_size} remaining", inline=True)
         
@@ -654,7 +686,7 @@ class Music(commands.Cog):
         vc = interaction.guild.voice_client
 
         if not vc or not vc.is_connected():
-            return await interaction.response.send_message('I am not currently playing anything!', ephemeral=True)
+            return await interaction.response.send_message('❌ I\'m not currently connected to a voice channel!', ephemeral=True)
 
         player = self.get_player(interaction)
         
@@ -680,7 +712,7 @@ class Music(commands.Cog):
         """Retrieve a basic queue of upcoming songs."""
         vc = interaction.guild.voice_client
         if not vc or not vc.is_connected():
-            return await interaction.response.send_message('I am not currently connected to voice!', ephemeral=True)
+            return await interaction.response.send_message('❌ I\'m not currently connected to a voice channel!', ephemeral=True)
 
         player = self.get_player(interaction)
         if not player.queue._queue:
