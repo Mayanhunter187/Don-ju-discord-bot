@@ -17,11 +17,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the current directory contents into the container at /app
-COPY . /app
+# Copy only requirements first to leverage cache
+COPY requirements.txt /app/requirements.txt
 
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir --upgrade -r requirements.txt
+
+# Copy the rest of the application
+COPY . /app
 
 # Run main.py when the container launches
 CMD ["sh", "-c", "cp /tmp/cookies-ro/cookies.txt /app/cookies.txt && python main.py"]
