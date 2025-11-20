@@ -378,8 +378,8 @@ class Music(commands.Cog):
         
         # Defer immediately so we have time to process
         try:
-            # URL = Public, Search = Private (Ephemeral)
-            await interaction.response.defer(ephemeral=not is_url)
+            # Always make the response private (Ephemeral)
+            await interaction.response.defer(ephemeral=True)
         except discord.HTTPException as e:
             # If interaction is already acknowledged, we can proceed
             if e.code == 40060:
