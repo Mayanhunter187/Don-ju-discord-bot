@@ -878,6 +878,59 @@ class Music(commands.Cog):
         
         await interaction.response.send_message(embed=embed)
 
+    @app_commands.command(name="cache", description="Shows cache statistics")
+    async def cache_info(self, interaction: discord.Interaction):
+        """Display cache statistics."""
+        if not os.path.exists('songs'):
+            return await interaction.response.send_message('❌ Cache directory not found!', ephemeral=True)
+        
+        # Count files
+        total_songs = 0
+        total_size = 0
+        audio_files = []
+        
+        for filename in os.listdir('songs'):
+            filepath = os.path.join('songs', filename)
+            if os.path.isfile(filepath):
+                file_size = os.path.getsize(filepath)
+                total_size += file_size
+                
+                # Count only audio files (not .json or .part files)
+                if not filename.endswith(('.json', '.part', '.ytdl', '.temp')):
+                    total_songs += 1
+                    audio_files.append((filename, file_size))
+        
+        # Format size
+        if total_size >= 1_073_741_824:  # >= 1 GB
+            size_str = f"{total_size / 1_073_741_824:.2f} GB"
+        elif total_size >= 1_048_576:  # >= 1 MB
+            size_str = f"{total_size / 1_048_576:.2f} MB"
+        else:
+            size_str = f"{total_size / 1024:.2f} KB"
+        
+        # Create embed
+        embed = discord.Embed(
+            title="💾 Cache Statistics",
+            description=f"**{total_songs}** songs cached\n**{size_str}** total size",
+            color=discord.Color.green()
+        )
+        
+        # Show top 5 largest files
+        if audio_files:
+            audio_files.sort(key=lambda x: x[1], reverse=True)
+            top_files = ""
+            for i, (filename, size) in enumerate(audio_files[:5], 1):
+                # Format filename (remove extension and video ID)
+                display_name = filename.rsplit('.', 1)[0][:40] + "..."
+                file_mb = size / 1_048_576
+                top_files += f"`{i}.` {display_name} • {file_mb:.1f} MB\n"
+            
+            if top_files:
+                embed.add_field(name="📊 Largest Files", value=top_files, inline=False)
+        
+        embed.set_footer(text="💡 Use /play to cache more songs automatically")
+        await interaction.response.send_message(embed=embed)
+
 async def setup(bot):
     if not os.path.exists('songs'):
         os.makedirs('songs')
