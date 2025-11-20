@@ -91,10 +91,10 @@ class YTDLSource(discord.PCMVolumeTransformer):
         return cls(discord.FFmpegPCMAudio(filename, **options), data=data, is_cached=is_cached)
 
 class MusicPlayer:
-    def __init__(self, interaction):
-        self.bot = interaction.client
-        self.guild = interaction.guild
-        self.channel = interaction.channel
+    def __init__(self, bot, guild, channel):
+        self.bot = bot
+        self.guild = guild
+        self.channel = channel
         self.queue = asyncio.Queue()
         self.next = asyncio.Event()
 
@@ -152,6 +152,9 @@ class MusicPlayer:
             source.volume = self.volume
             self.current = source
 
+            # Save state when song starts
+            self.bot.get_cog("Music").save_state()
+
             try:
                 print(f"DEBUG: Playing {source.title}", flush=True)
                 
@@ -196,6 +199,8 @@ class MusicPlayer:
                 print(f"DEBUG: Error cleaning up source: {e}", flush=True)
             
             self.current = None
+            # Save state when song ends
+            self.bot.get_cog("Music").save_state()
 
     def destroy(self, guild):
         # Cleanup via the Cog
@@ -244,6 +249,7 @@ class Music(commands.Cog):
         self.bot = bot
         self.players = {}
         self.cleanup_partial_files()
+        self.bot.loop.create_task(self.load_state())
     
     def cleanup_cache(self):
         self.cleanup_partial_files()
@@ -260,6 +266,84 @@ class Music(commands.Cog):
                 except Exception as e:
                     print(f"Failed to delete {filename}: {e}")
 
+    def save_state(self):
+        """Saves the current queue and playing song to a file."""
+        state = {}
+        for guild_id, player in self.players.items():
+            queue_list = []
+            # Add current song if playing (so it restarts)
+            if player.current:
+                 if isinstance(player.current, YTDLSource):
+                     queue_list.append(player.current.data)
+                 elif isinstance(player.current, dict):
+                     queue_list.append(player.current)
+            
+            # Add rest of queue
+            for item in player.queue._queue:
+                queue_list.append(item)
+
+            if queue_list:
+                # Only save if there's something to play
+                voice_channel_id = player.guild.voice_client.channel.id if player.guild.voice_client else None
+                if voice_channel_id:
+                    state[str(guild_id)] = {
+                        'voice_channel': voice_channel_id,
+                        'text_channel': player.channel.id,
+                        'queue': queue_list
+                    }
+        
+        try:
+            with open('songs/state.json', 'w') as f:
+                json.dump(state, f)
+            print("DEBUG: State saved.", flush=True)
+        except Exception as e:
+            print(f"Error saving state: {e}", flush=True)
+
+    async def load_state(self):
+        """Loads the queue from file on startup."""
+        await self.bot.wait_until_ready()
+        if not os.path.exists('songs/state.json'):
+            return
+            
+        print("DEBUG: Loading state...", flush=True)
+        try:
+            with open('songs/state.json', 'r') as f:
+                state = json.load(f)
+                
+            for guild_id_str, data in state.items():
+                guild_id = int(guild_id_str)
+                guild = self.bot.get_guild(guild_id)
+                if not guild:
+                    continue
+                    
+                voice_channel = guild.get_channel(data['voice_channel'])
+                text_channel = guild.get_channel(data['text_channel'])
+                
+                if voice_channel and text_channel:
+                    # Connect
+                    if not guild.voice_client:
+                        try:
+                            await voice_channel.connect()
+                        except Exception as e:
+                            print(f"Failed to reconnect voice: {e}", flush=True)
+                            continue
+                    
+                    # Get player
+                    if guild.id not in self.players:
+                         player = MusicPlayer(self.bot, guild, text_channel)
+                         self.players[guild.id] = player
+                    else:
+                        player = self.players[guild.id]
+
+                    # Populate queue
+                    for song_data in data['queue']:
+                        await player.queue.put(song_data)
+                    
+                    print(f"DEBUG: Restored queue for guild {guild.name}", flush=True)
+                        
+        except Exception as e:
+            print(f"Error loading state: {e}", flush=True)
+
     async def cleanup(self, guild):
         try:
             await guild.voice_client.disconnect()
@@ -270,12 +354,14 @@ class Music(commands.Cog):
             del self.players[guild.id]
         except KeyError:
             pass
+        
+        self.save_state()
 
     def get_player(self, interaction):
         try:
             player = self.players[interaction.guild.id]
         except KeyError:
-            player = MusicPlayer(interaction)
+            player = MusicPlayer(interaction.client, interaction.guild, interaction.channel)
             self.players[interaction.guild.id] = player
         return player
 
@@ -367,7 +453,7 @@ class Music(commands.Cog):
             # Create Embed for Public Queue Log
             embed = discord.Embed(title="Queued", description=f"[{data['title']}]({data['webpage_url']})", color=discord.Color.green())
             if data.get('thumbnail'):
-                embed.set_thumbnail(url=data['thumbnail'])
+                embed.set_image(url=data['thumbnail'])
             if data.get('duration'):
                 embed.add_field(name="Duration", value=f"{int(data['duration']//60)}:{int(data['duration']%60):02d}")
             
@@ -384,8 +470,15 @@ class Music(commands.Cog):
             # Send Public Embed
             await interaction.channel.send(embed=embed)
 
-            # Close Ephemeral Interaction
-            await interaction.edit_original_response(content="✅ Request sent to queue!", embed=None, view=None)
+            # Close Ephemeral Interaction (Delete it so it vanishes)
+            try:
+                await interaction.delete_original_response()
+            except:
+                # Fallback if delete fails (e.g. too old), just edit to empty
+                await interaction.edit_original_response(content="✅ Queued", embed=None, view=None)
+            
+            # Save state
+            self.save_state()
             
         except ValueError as e:
              await interaction.edit_original_response(content=f"{e}")
@@ -479,6 +572,7 @@ class Music(commands.Cog):
 
         print("DEBUG: Calling vc.stop()", flush=True)
         vc.stop()
+        self.save_state()
         await interaction.response.send_message(f'**`{interaction.user}`**: Skipped the song!')
 
     @app_commands.command(name="stop", description="Stops the song and clears the queue")
@@ -503,8 +597,24 @@ class Music(commands.Cog):
             return await interaction.response.send_message('There are currently no more queued songs.')
 
         upcoming = list(player.queue._queue)
-        fmt = '\n'.join(f'**{i + 1}.** {str(song)}' for i, song in enumerate(upcoming))
-        embed = discord.Embed(title=f'Upcoming - Next {len(upcoming)}', description=fmt)
+        
+        fmt = ""
+        for i, song in enumerate(upcoming):
+            # Handle both dict (pre-download) and YTDLSource (legacy)
+            if isinstance(song, dict):
+                title = song.get('title', 'Unknown Title')
+                url = song.get('webpage_url', '')
+            else:
+                title = song.title
+                url = song.webpage_url
+            
+            line = f"**{i + 1}.** [{title}]({url})\n"
+            if len(fmt) + len(line) > 4000:
+                fmt += f"... and {len(upcoming) - i} more."
+                break
+            fmt += line
+
+        embed = discord.Embed(title=f'Upcoming - Next {len(upcoming)}', description=fmt, color=discord.Color.blurple())
         await interaction.response.send_message(embed=embed)
 
 async def setup(bot):
