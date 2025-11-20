@@ -230,6 +230,9 @@ class Music(commands.Cog):
         self.bot = bot
         self.players = {}
         self.cleanup_partial_files()
+    
+    def cleanup_cache(self):
+        self.cleanup_partial_files()
 
     def cleanup_partial_files(self):
         """Clean up .part, .ytdl, and .temp files on startup."""

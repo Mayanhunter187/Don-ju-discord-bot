@@ -53,21 +53,32 @@ class MusicBot(commands.Bot):
         print('------', flush=True)
 
     async def on_message(self, message):
-        # Allow !sync command to work
-        if message.content == "!sync" and message.author.id == 184405311681986560: # Optional: Restrict to owner if needed, or just allow for testing
+        # Allow !sync command to work (Legacy/Emergency)
+        if message.content == "!sync" and message.author.id == 184405311681986560:
+             # Copy global commands to this guild to make them instant
+             self.tree.copy_global_to(guild=message.guild)
              await self.tree.sync(guild=message.guild)
-             await message.channel.send(f"✅ Synced commands to this guild!")
+             await message.channel.send(f"✅ Force-synced global commands to this guild!")
              return
         
         await self.process_commands(message)
 
 bot = MusicBot()
 
-@bot.command()
-async def sync(ctx):
+@bot.tree.command(name="sync", description="Force sync commands to this server (Admin only)")
+async def sync_slash(interaction: discord.Interaction):
     """Syncs commands to the current guild for instant updates."""
-    fmt = await ctx.bot.tree.sync(guild=ctx.guild)
-    await ctx.send(f"Synced {len(fmt)} commands to the current guild.")
+    # Check if user is admin or owner (simple check for now)
+    if interaction.user.id != 184405311681986560 and not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("You do not have permission to use this.", ephemeral=True)
+
+    await interaction.response.defer(ephemeral=True)
+    
+    # Copy global commands to this guild
+    interaction.client.tree.copy_global_to(guild=interaction.guild)
+    fmt = await interaction.client.tree.sync(guild=interaction.guild)
+    
+    await interaction.followup.send(f"✅ Synced {len(fmt)} commands to this server! They should be visible immediately.")
 
 if __name__ == "__main__":
     if not TOKEN:
