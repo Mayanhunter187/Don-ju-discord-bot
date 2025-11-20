@@ -5,11 +5,9 @@ import asyncio
 import yt_dlp
 import os
 import json
-import json
 import re
 import random
 
-# YouTube DL options
 # YouTube DL options
 ytdl_format_options = {
     'format': 'bestaudio/best',
@@ -623,9 +621,6 @@ class Music(commands.Cog):
     @app_commands.command(name="stop", description="Stops the song and clears the queue")
     async def stop(self, interaction: discord.Interaction):
         """Stops playing song and clears the queue."""
-        vc = interaction.guild.voice_client
-        if not vc or not vc.is_connected():
-        """Stops the song."""
         vc = interaction.guild.voice_client
 
         if not vc or not vc.is_connected():
