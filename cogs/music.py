@@ -221,16 +221,6 @@ class SearchView(ui.View):
     @ui.button(label="Cancel", style=discord.ButtonStyle.red, emoji="✖️")
     async def cancel(self, interaction: discord.Interaction, button: ui.Button):
         if interaction.user != self.interaction_user:
-            return await interaction.response.send_message("This search menu is not for you!", ephemeral=True)
-        
-        await interaction.response.edit_message(content="Search cancelled.", view=None, embed=None)
-
-
-
-    async def cleanup(self, guild):
-        try:
-            await guild.voice_client.disconnect()
-        except AttributeError:
             pass
 
         try:
