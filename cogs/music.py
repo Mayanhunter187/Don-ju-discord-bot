@@ -221,6 +221,32 @@ class SearchView(ui.View):
     @ui.button(label="Cancel", style=discord.ButtonStyle.red, emoji="✖️")
     async def cancel(self, interaction: discord.Interaction, button: ui.Button):
         if interaction.user != self.interaction_user:
+            return await interaction.response.send_message("This search menu is not for you!", ephemeral=True)
+        
+        await interaction.response.edit_message(content="Search cancelled.", view=None, embed=None)
+
+class Music(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        self.players = {}
+        self.cleanup_partial_files()
+
+    def cleanup_partial_files(self):
+        """Clean up .part, .ytdl, and .temp files on startup."""
+        if not os.path.exists('songs'):
+            return
+            
+        for filename in os.listdir('songs'):
+            if filename.endswith(('.part', '.ytdl', '.temp')):
+                try:
+                    os.remove(os.path.join('songs', filename))
+                except Exception as e:
+                    print(f"Failed to delete {filename}: {e}")
+
+    async def cleanup(self, guild):
+        try:
+            await guild.voice_client.disconnect()
+        except AttributeError:
             pass
 
         try:
