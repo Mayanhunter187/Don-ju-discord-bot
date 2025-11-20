@@ -5,72 +5,68 @@ from discord.ext import commands
 class Help(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.commands_info = {
-            "play": {
-                "description": "Plays a song from YouTube.",
-                "usage": "/play <search>",
-                "example": "/play search: lofi hip hop"
-            },
-            "pause": {
-                "description": "Pauses the currently playing song.",
-                "usage": "/pause",
-                "example": "/pause"
-            },
-            "resume": {
-                "description": "Resumes playback if paused.",
-                "usage": "/resume",
-                "example": "/resume"
-            },
-            "skip": {
-                "description": "Skips the current song.",
-                "usage": "/skip",
-                "example": "/skip"
-            },
-            "stop": {
-                "description": "Stops playback and clears the queue.",
-                "usage": "/stop",
-                "example": "/stop"
-            },
-            "queue": {
-                "description": "Shows the upcoming songs in the queue.",
-                "usage": "/queue",
-                "example": "/queue"
-            },
-            "help": {
-                "description": "Shows this help message.",
-                "usage": "/help [command]",
-                "example": "/help play"
-            }
-        }
-
-    async def help_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-        choices = [
-            app_commands.Choice(name=cmd, value=cmd)
-            for cmd in self.commands_info.keys()
-            if current.lower() in cmd.lower()
-        ]
-        return choices[:25]
 
     @app_commands.command(name="help", description="Shows help for commands")
-    @app_commands.describe(command="The command to get help for")
-    @app_commands.autocomplete(command=help_autocomplete)
+    @app_commands.describe(command="Optional: Get help for a specific command")
     async def help(self, interaction: discord.Interaction, command: str = None):
-        """Shows help for commands."""
+        """Shows help information."""
+        
         if command:
-            info = self.commands_info.get(command.lower())
-            if info:
-                embed = discord.Embed(title=f"Help: /{command}", color=discord.Color.blue())
-                embed.add_field(name="Description", value=info['description'], inline=False)
-                embed.add_field(name="Usage", value=f"`{info['usage']}`", inline=False)
-                embed.add_field(name="Example", value=f"`{info['example']}`", inline=False)
+            # Show specific command help
+            cmd = self.bot.tree.get_command(command)
+            if cmd:
+                embed = discord.Embed(
+                    title=f"📖 Help: /{cmd.name}",
+                    description=cmd.description or "No description available.",
+                    color=discord.Color.blue()
+                )
+                
+                if hasattr(cmd, 'parameters') and cmd.parameters:
+                    params_text = ""
+                    for param in cmd.parameters:
+                        params_text += f"**{param.name}**: {param.description or 'No description'}\n"
+                    embed.add_field(name="Parameters", value=params_text, inline=False)
+                
                 await interaction.response.send_message(embed=embed)
             else:
                 await interaction.response.send_message(f"Command `{command}` not found.", ephemeral=True)
         else:
-            embed = discord.Embed(title="🤖 Bot Commands", description="Here are the available commands:", color=discord.Color.blue())
-            for cmd, info in self.commands_info.items():
-                embed.add_field(name=f"/{cmd}", value=info['description'], inline=False)
-            embed.set_footer(text="Type /help <command> for more details.")
+            # Show all commands organized by category
+            embed = discord.Embed(
+                title="🎵 Don'Ju Music Bot - Command Guide",
+                description="Here are all available commands, organized by category:",
+                color=discord.Color.gold()
+            )
+            
+            # Playback Controls
+            playback_cmds = [
+                ("play", "Play a song from YouTube (URL or search)"),
+                ("pause", "Pause the current song"),
+                ("resume", "Resume playback"),
+                ("skip", "Skip to the next song"),
+                ("stop", "Stop playback and clear the queue")
+            ]
+            playback_text = "\n".join([f"`/{cmd}` - {desc}" for cmd, desc in playback_cmds])
+            embed.add_field(name="🎮 Playback Controls", value=playback_text, inline=False)
+            
+            # Queue Management
+            queue_cmds = [
+                ("queue", "View the current song queue"),
+                ("cache", "View cache statistics and recent downloads")
+            ]
+            queue_text = "\n".join([f"`/{cmd}` - {desc}" for cmd, desc in queue_cmds])
+            embed.add_field(name="📋 Queue & Cache", value=queue_text, inline=False)
+            
+            # Utility
+            utility_cmds = [
+                ("sync", "Sync commands to the server (Admin only)"),
+                ("help", "Show this help message")
+            ]
+            utility_text = "\n".join([f"`/{cmd}` - {desc}" for cmd, desc in utility_cmds])
+            embed.add_field(name="🛠️ Utility", value=utility_text, inline=False)
+            
+            embed.set_footer(text="Use /help <command> for detailed information about a specific command")
+            
             await interaction.response.send_message(embed=embed)
 
 async def setup(bot):

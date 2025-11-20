@@ -547,12 +547,15 @@ class Music(commands.Cog):
 
             view = SearchView(self, interaction.user)
             
-            # Process top 5 results (Fix: Convert to list to avoid islice error)
+            # Process top 5 results and build formatted list
             entries = list(data['entries'])
-            for entry in entries[:5]:
+            results_list = ""
+            
+            for i, entry in enumerate(entries[:5], 1):
                 title = entry.get('title', 'Unknown Title')
                 url = entry.get('url', '')
-                video_id = entry.get('id') # ytsearch usually provides ID
+                video_id = entry.get('id')
+                duration = entry.get('duration', 0)
                 
                 # Check cache status
                 is_cached = False
@@ -560,16 +563,27 @@ class Music(commands.Cog):
                      if os.path.exists(f'songs/{video_id}.info.json'):
                          is_cached = True
                 
+                # Format duration
+                duration_str = f"{int(duration//60)}:{int(duration%60):02d}" if duration else "?"
+                
+                # Truncate title for display
+                display_title = title[:50] + "..." if len(title) > 50 else title
+                
+                # Build list entry with emoji
+                cache_emoji = "💾" if is_cached else "☁️"
+                number_emoji = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"][i-1]
+                results_list += f"{number_emoji} {cache_emoji} **{display_title}** `[{duration_str}]`\n"
+                
                 # Add button
                 view.add_item(SearchButton(title, url, is_cached, self, interaction.user))
 
             # Edit the scanning message to show the menu
             results_embed = discord.Embed(
                 title="🎵 Search Results",
-                description="Select a track from the options below:",
-                color=discord.Color.green()
+                description=results_list,
+                color=discord.Color.gold()
             )
-            results_embed.set_footer(text=f"💾 = Cached | ☁️ = New Download")
+            results_embed.set_footer(text=f"Click a button below to select • 💾 = Cached | ☁️ = New")
             await scan_msg.edit(embed=results_embed, view=view)
 
         except Exception as e:
@@ -597,17 +611,44 @@ class Music(commands.Cog):
         print("DEBUG: Calling vc.stop()", flush=True)
         vc.stop()
         self.save_state()
-        await interaction.response.send_message(f'**`{interaction.user}`**: Skipped the song!')
+        
+        # Send styled skip embed (orange)
+        embed = discord.Embed(
+            title="⏭️ Song Skipped",
+            description=f"Skipped by {interaction.user.mention}",
+            color=discord.Color.orange()
+        )
+        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="stop", description="Stops the song and clears the queue")
     async def stop(self, interaction: discord.Interaction):
         """Stops playing song and clears the queue."""
         vc = interaction.guild.voice_client
         if not vc or not vc.is_connected():
+        """Stops the song."""
+        vc = interaction.guild.voice_client
+
+        if not vc or not vc.is_connected():
             return await interaction.response.send_message('I am not currently playing anything!', ephemeral=True)
 
-        await self.cleanup(interaction.guild)
-        await interaction.response.send_message(f'**`{interaction.user}`**: Stopped and disconnected!')
+        player = self.get_player(interaction)
+        
+        # Clear the queue
+        while not player.queue.empty():
+            try:
+                player.queue.get_nowait()
+            except:
+                break
+        
+        vc.stop()
+        
+        # Send styled stop embed (red)
+        embed = discord.Embed(
+            title="⏹️ Playback Stopped",
+            description=f"Stopped by {interaction.user.mention}\nQueue cleared.",
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="queue", description="Shows the queue")
     async def queue_info(self, interaction: discord.Interaction):
