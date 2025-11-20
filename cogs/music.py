@@ -148,41 +148,15 @@ class MusicPlayer:
             if hasattr(source, 'title'):
                 print(f"DEBUG: source.title: {source.title}", flush=True)
 
-            # Check if we need to seek to a specific position (resuming)
-            ffmpeg_opts = ffmpeg_options_local if source.is_cached else ffmpeg_options_stream
-            if self.seek_position > 0:
-                # Add seek option to start from specific position
-                before_opts = ffmpeg_opts.get('before_options', '')
-                if before_opts:
-                    before_opts += f" -ss {int(self.seek_position)}"
-                else:
-                    before_opts = f"-ss {int(self.seek_position)}"
-                
-                ffmpeg_opts = ffmpeg_opts.copy() # Create a copy to avoid modifying global dict
-                ffmpeg_opts['before_options'] = before_opts
-                print(f"DEBUG: Seeking to {int(self.seek_position)} seconds", flush=True)
-                self.seek_position = 0  # Reset after applying
-
-            # Create the actual FFmpegPCMAudio source with potential seek options
-            audio_source = discord.FFmpegPCMAudio(source.stream_url, **ffmpeg_opts)
-            # Wrap it in PCMVolumeTransformer
-            volume_source = discord.PCMVolumeTransformer(audio_source)
-            volume_source.volume = self.volume
-
-            # Copy essential properties from the YTDLSource to the new volume_source
-            # This allows the after_callback and embed creation to access them.
-            volume_source.title = self.current.title
-            volume_source.webpage_url = self.current.webpage_url
-            volume_source.thumbnail = self.current.thumbnail
-            volume_source.duration = self.current.duration
-            volume_source.is_cached = self.current.is_cached
-            volume_source.requested_by = self.current.requested_by
+            # YTDLSource is already a PCMVolumeTransformer, we can use it directly
+            # But we need to apply volume
+            source.volume = self.volume
 
             # Save state when song starts
             self.bot.get_cog("Music").save_state()
 
             try:
-                print(f"DEBUG: Playing {volume_source.title}", flush=True)
+                print(f"DEBUG: Playing {source.title}", flush=True)
                 
                 def after_callback(error):
                     if error:
@@ -194,7 +168,7 @@ class MusicPlayer:
                 import time
                 self.playback_start_time = time.time()
                 
-                self.guild.voice_client.play(volume_source, after=after_callback)
+                self.guild.voice_client.play(source, after=after_callback)
                 
                 # Create Embed for Now Playing (Purple, Large Image)
                 if source.duration:
