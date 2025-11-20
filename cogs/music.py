@@ -133,11 +133,12 @@ class MusicPlayer:
                     
                     # Create source from local file (stream=False)
                     source = YTDLSource.create_from_data(source, stream=False, is_cached=is_cached)
-                    # Convert to actual source at play time, handling download if needed
-                    source = await YTDLSource.from_data(data=source, loop=self.bot.loop, stream=False) # Assume downloaded for dicts
+                except ValueError as e:
+                    await self.channel.send(f"{e}")
+                    continue
                 except Exception as e:
                     print(f"Error converting data: {e}", flush=True)
-                    await self.channel.send(f"Error loading song: {e}")
+                    await self.channel.send(f'Error creating audio source: {e}')
                     continue
             
             # Now we have a YTDLSource object
