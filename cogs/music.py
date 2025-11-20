@@ -188,7 +188,13 @@ class MusicPlayer:
             print("DEBUG: Wait finished, cleaning up...", flush=True)
 
             # Make sure the FFmpeg process is cleaned up.
-            source.cleanup()
+            try:
+                source.cleanup()
+            except ValueError:
+                print("DEBUG: Source already cleaned up (ValueError ignored)", flush=True)
+            except Exception as e:
+                print(f"DEBUG: Error cleaning up source: {e}", flush=True)
+            
             self.current = None
 
     def destroy(self, guild):
