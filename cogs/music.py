@@ -316,10 +316,10 @@ class Music(commands.Cog):
                     print(f"Failed to delete {filename}: {e}")
 
     def save_state(self):
-        """Saves the current queue and playing song to a file."""
+        """Saves the current queue and playback state to disk."""
         state = {}
         for guild_id, player in self.players.items():
-            queue_list = list(player.queue._queue)
+            queue_list = []
             
             # Calculate current playback position if playing
             current_position = 0
@@ -327,14 +327,22 @@ class Music(commands.Cog):
                 elapsed = time.time() - player.playback_start_time
                 current_position = int(elapsed)
             
-            # Only save if there's something in the queue or currently playing
-            if queue_list or player.current:
+            # Add currently playing song to the front of the queue with position
+            if player.current:
+                if isinstance(player.current, YTDLSource):
+                    current_song_data = player.current.data.copy()
+                    current_song_data['_resume_position'] = current_position  # Special marker
+                    queue_list.append(current_song_data)
+            
+            # Add rest of queue
+            queue_list.extend(list(player.queue._queue))
+            
+            # Only save if there's something in the queue
+            if queue_list:
                 state[guild_id] = {
                     'voice_channel': player.guild.voice_client.channel.id if player.guild.voice_client else None,
                     'text_channel': player.channel.id,
-                    'queue': queue_list,
-                    'current_song': player.current.data if player.current else None,
-                    'current_position': current_position  # Save playback position
+                    'queue': queue_list
                 }
         
         try:
@@ -385,10 +393,12 @@ class Music(commands.Cog):
                     for song_data in data['queue']:
                         await player.queue.put(song_data)
                     
-                    # Restore playback position if available
-                    if 'current_position' in data and data['current_position'] > 0:
-                        player.seek_position = data['current_position']
-                        print(f"DEBUG: Will resume from {data['current_position']} seconds", flush=True)
+                    # Check if first song has a resume position marker
+                    if data['queue'] and '_resume_position' in data['queue'][0]:
+                        resume_pos = data['queue'][0]['_resume_position']
+                        if resume_pos > 0:
+                            player.seek_position = resume_pos
+                            print(f"DEBUG: Will resume from {resume_pos} seconds", flush=True)
                     
                     # Set flag to indicate this is a resumed session
                     player._resumed_from_state = True
@@ -401,7 +411,14 @@ class Music(commands.Cog):
                         # Truncate long titles
                         if len(title) > 50:
                             title = title[:47] + "..."
-                        queue_preview += f"`{i}.` {title}\n"
+                        
+                        # Show resume indicator for first song
+                        if i == 1 and '_resume_position' in song:
+                            mins = int(song['_resume_position'] // 60)
+                            secs = int(song['_resume_position'] % 60)
+                            queue_preview += f"`{i}.` {title} `(resuming at {mins}:{secs:02d})`\n"
+                        else:
+                            queue_preview += f"`{i}.` {title}\n"
                     
                     if len(data['queue']) > 10:
                         queue_preview += f"\n*...and {len(data['queue']) - 10} more songs*"
@@ -412,12 +429,6 @@ class Music(commands.Cog):
                         description="I'm back! Resuming playback from where we left off...",
                         color=discord.Color.blue()
                     )
-                    
-                    # Add position info if resuming mid-song
-                    if 'current_position' in data and data['current_position'] > 0:
-                        mins = int(data['current_position'] // 60)
-                        secs = int(data['current_position'] % 60)
-                        resume_embed.add_field(name="⏱️ Resume Point", value=f"{mins}:{secs:02d}", inline=True)
                     
                     resume_embed.add_field(name="📋 Queue Status", value=f"**{len(data['queue'])}** song(s) queued", inline=False)
                     
