@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 import os
 from dotenv import load_dotenv
 import shutil
@@ -10,7 +11,6 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 # Debug: Check environment and node availability
-# Explicitly add common paths to PATH to ensure node is found
 os.environ['PATH'] = os.environ.get('PATH', '') + ':/usr/bin:/usr/local/bin'
 print(f"DEBUG: PATH={os.environ.get('PATH')}", flush=True)
 print(f"DEBUG: node path={shutil.which('node')}", flush=True)
@@ -41,7 +41,7 @@ class MusicBot(commands.Bot):
         else:
             print("Error: ./cogs directory not found!", flush=True)
 
-        # Sync commands globally
+        # Sync commands globally ONLY
         try:
             synced = await self.tree.sync()
             print(f"Synced {len(synced)} command(s) globally", flush=True)
@@ -52,33 +52,23 @@ class MusicBot(commands.Bot):
         print(f'Logged in as {self.user} (ID: {self.user.id})', flush=True)
         print('------', flush=True)
 
-    async def on_message(self, message):
-        # Allow !sync command to work (Legacy/Emergency)
-        if message.content == "!sync" and message.author.id == 184405311681986560:
-             # Copy global commands to this guild to make them instant
-             self.tree.copy_global_to(guild=message.guild)
-             await self.tree.sync(guild=message.guild)
-             await message.channel.send(f"✅ Force-synced global commands to this guild!")
-             return
-        
-        await self.process_commands(message)
-
 bot = MusicBot()
 
-@bot.tree.command(name="sync", description="Force sync commands to this server (Admin only)")
-async def sync_slash(interaction: discord.Interaction):
-    """Syncs commands to the current guild for instant updates."""
-    # Check if user is admin or owner (simple check for now)
-    if interaction.user.id != 184405311681986560 and not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("You do not have permission to use this.", ephemeral=True)
-
+@bot.tree.command(name="sync", description="Clear and resync commands (Admin only)")
+@app_commands.default_permissions(administrator=True)
+async def sync_command(interaction: discord.Interaction):
+    """Clear guild commands and wait for global commands to propagate."""
     await interaction.response.defer(ephemeral=True)
     
-    # Copy global commands to this guild
-    interaction.client.tree.copy_global_to(guild=interaction.guild)
-    fmt = await interaction.client.tree.sync(guild=interaction.guild)
+    # Clear guild-specific commands to remove duplicates
+    interaction.client.tree.clear_commands(guild=interaction.guild)
+    await interaction.client.tree.sync(guild=interaction.guild)
     
-    await interaction.followup.send(f"✅ Synced {len(fmt)} commands to this server! They should be visible immediately.")
+    await interaction.followup.send(
+        "✅ Cleared guild commands. Global commands will appear in ~1 hour.\n"
+        "**Tip:** Restart Discord to see them immediately.",
+        ephemeral=True
+    )
 
 if __name__ == "__main__":
     if not TOKEN:
