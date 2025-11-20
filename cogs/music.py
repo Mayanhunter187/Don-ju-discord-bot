@@ -364,7 +364,11 @@ class Music(commands.Cog):
             
             await player.queue.put(data)
             
-            # Update with the result (Embed)
+            # Public Log Message
+            queue_pos = player.queue.qsize()
+            await interaction.channel.send(f"🎵 **{data['title']}** added to queue by **{interaction.user.name}** (Position: #{queue_pos})")
+            
+            # Update with the result (Embed) - Private Confirmation
             embed = discord.Embed(title="Queued", description=f"[{data['title']}]({data['webpage_url']})", color=discord.Color.green())
             if data.get('thumbnail'):
                 embed.set_thumbnail(url=data['thumbnail'])
