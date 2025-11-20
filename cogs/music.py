@@ -1,3 +1,4 @@
+```python
 import discord
 from discord import app_commands, ui
 from discord.ext import commands
@@ -7,6 +8,7 @@ import os
 import json
 import re
 import random
+import time
 
 # YouTube DL options
 ytdl_format_options = {
@@ -165,12 +167,14 @@ class MusicPlayer:
                     self.bot.loop.call_soon_threadsafe(self.next.set)
 
                 # Track when playback starts
-                import time
                 self.playback_start_time = time.time()
                 
                 self.guild.voice_client.play(source, after=after_callback)
                 
                 # Create Embed for Now Playing (Purple, Large Image)
+                embed = discord.Embed(title="Now Playing", description=f"[{source.title}]({source.webpage_url})", color=discord.Color.purple())
+                if source.thumbnail:
+                    embed.set_image(url=source.thumbnail)
                 if source.duration:
                     embed.add_field(name="Duration", value=f"{int(source.duration//60)}:{int(source.duration%60):02d}", inline=True)
                 
