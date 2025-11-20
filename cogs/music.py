@@ -224,20 +224,7 @@ class SearchView(ui.View):
             return await interaction.response.send_message("This search menu is not for you!", ephemeral=True)
         
         await interaction.response.edit_message(content="Search cancelled.", view=None, embed=None)
-            path = os.path.join(cache_dir, f)
-            if os.path.isfile(path):
-                size = os.path.getsize(path)
-                total_size += size
-                files.append((path, os.path.getmtime(path), size))
-        
-        if total_size > max_size:
-            # Sort by modification time (oldest first)
-            files.sort(key=lambda x: x[1])
-            
-            for path, _, size in files:
-                try:
-                    os.remove(path)
-                    total_size -= size
+
                     print(f"Deleted {path} to free space.")
                     if total_size <= max_size:
                         break
