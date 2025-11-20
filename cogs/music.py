@@ -826,19 +826,66 @@ class Music(commands.Cog):
             return await interaction.response.send_message('❌ I\'m not currently connected to a voice channel!', ephemeral=True)
 
         player = self.get_player(interaction)
-        if not player.queue._queue:
-            empty_embed = discord.Embed(
-                title="📭 Queue is Empty",
-                description="No songs are currently queued.\n\n💡 Use `/play` to add some tracks!",
-                color=discord.Color.light_gray()
-            )
-            return await interaction.response.send_message(embed=empty_embed)
-
-        upcoming = list(player.queue._queue)
         
         # Build formatted queue list with better presentation
         fmt = ""
         total_duration = 0
+        
+        # Show currently playing song first
+        if player.current:
+            current = player.current
+            if isinstance(current, YTDLSource):
+                title = current.title
+                url = current.webpage_url
+                duration = current.duration
+            else:
+                title = "Unknown"
+                url = None
+                duration = 0
+            
+            total_duration += duration
+            
+            # Format duration cleanly
+            mins = int(duration // 60)
+            secs = int(duration % 60)
+            duration_str = f"{mins}:{secs:02d}" if duration else "?"
+            
+            # Truncate long title
+            display_title = title[:45] + "..." if len(title) > 45 else title
+            
+            # Currently playing indicator
+            if url:
+                fmt += f"▶️ **Now Playing:** [{display_title}]({url}) • `{duration_str}`\n\n"
+            else:
+                fmt += f"▶️ **Now Playing:** {display_title} • `{duration_str}`\n\n"
+        
+        # Check if queue has upcoming songs
+        if not player.queue._queue:
+            if not player.current:
+                empty_embed = discord.Embed(
+                    title="📭 Queue is Empty",
+                    description="No songs are currently queued.\n\n💡 Use `/play` to add some tracks!",
+                    color=discord.Color.light_gray()
+                )
+                return await interaction.response.send_message(embed=empty_embed)
+            else:
+                # Only current song, no upcoming
+                embed = discord.Embed(
+                    title='📜 Queue — 1 Track',
+                    description=fmt,
+                    color=discord.Color.blue()
+                )
+                
+                if total_duration > 0:
+                    total_mins = int(total_duration // 60)
+                    total_secs = int(total_duration % 60)
+                    time_str = f"{total_mins}m {total_secs}s"
+                    embed.set_footer(text=f"⏱️ Total Duration: {time_str}")
+                
+                return await interaction.response.send_message(embed=embed)
+
+        upcoming = list(player.queue._queue)
+        fmt += "**Up Next:**\n"
         
         for i, song in enumerate(upcoming):
             # Handle both dict (pre-download) and YTDLSource (legacy)
@@ -870,8 +917,11 @@ class Music(commands.Cog):
             fmt += line
 
         # Create modern queue embed
+        total_tracks = 1 if player.current else 0
+        total_tracks += len(upcoming)
+        
         embed = discord.Embed(
-            title=f'📜 Queue — {len(upcoming)} Track{"s" if len(upcoming) != 1 else ""}',
+            title=f'📜 Queue — {total_tracks} Track{"s" if total_tracks != 1 else ""}',
             description=fmt,
             color=discord.Color.blue()
         )
@@ -913,7 +963,21 @@ class Music(commands.Cog):
                 # Count only audio files (not .json or .part files)
                 if not filename.endswith(('.json', '.part', '.ytdl', '.temp')):
                     total_songs += 1
-                    audio_files.append((filename, file_size))
+                    
+                    # Try to get friendly name from .info.json
+                    video_id = filename.rsplit('.', 1)[0]  # Remove extension
+                    info_path = os.path.join('songs', f'{video_id}.info.json')
+                    friendly_name = filename  # Default to filename
+                    
+                    if os.path.exists(info_path):
+                        try:
+                            with open(info_path, 'r') as f:
+                                info = json.load(f)
+                                friendly_name = info.get('title', filename)
+                        except:
+                            pass  # Use filename if JSON reading fails
+                    
+                    audio_files.append((friendly_name, file_size))
         
         # Format size
         if total_size >= 1_073_741_824:  # >= 1 GB
@@ -934,9 +998,9 @@ class Music(commands.Cog):
         if audio_files:
             audio_files.sort(key=lambda x: x[1], reverse=True)
             top_files = ""
-            for i, (filename, size) in enumerate(audio_files[:5], 1):
-                # Format filename (remove extension and video ID)
-                display_name = filename.rsplit('.', 1)[0][:40] + "..."
+            for i, (song_title, size) in enumerate(audio_files[:5], 1):
+                # Truncate long titles
+                display_name = song_title[:50] + "..." if len(song_title) > 50 else song_title
                 file_mb = size / 1_048_576
                 top_files += f"`{i}.` {display_name} • {file_mb:.1f} MB\n"
             
