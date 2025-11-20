@@ -525,13 +525,15 @@ class Music(commands.Cog):
         # If Search Query, show menu
         search_query = f"ytsearch5:{search}"
         
-        # Send initial scanning message with yellow theme
+        # Send initial scanning message with loading animation
         embed = discord.Embed(
             title="🔍 Searching YouTube",
-            description=f"Looking for: **{search}**\n\n⏳ Scanning the airwaves...",
+            description=f"**Query:** `{search}`",
             color=discord.Color.gold()
         )
-        embed.set_footer(text="This usually takes a few seconds")
+        embed.add_field(name="⏱️ Status", value="🔄 Scanning YouTube's library...", inline=False)
+        embed.add_field(name="📊 Progress", value="▰▰▰▱▱▱▱▱▱▱ Fetching results", inline=False)
+        embed.set_footer(text="This usually takes 2-5 seconds")
         scan_msg = await interaction.followup.send(embed=embed)
 
         try:
@@ -612,16 +614,38 @@ class Music(commands.Cog):
             print("DEBUG: Skip called but not playing", flush=True)
             return await interaction.response.send_message('I am not playing anything to skip!', ephemeral=True)
 
+        # Get player and current song info
+        player = self.get_player(interaction)
+        current_song = player.current
+        queue_size = player.queue.qsize()
+        
+        # Get song title
+        if current_song:
+            if isinstance(current_song, YTDLSource):
+                song_title = current_song.title
+            else:
+                song_title = "Unknown"
+        else:
+            song_title = "Unknown"
+
         print("DEBUG: Calling vc.stop()", flush=True)
         vc.stop()
         self.save_state()
         
-        # Send styled skip embed (orange)
+        # Send enhanced skip embed with details
         embed = discord.Embed(
             title="⏭️ Song Skipped",
-            description=f"Skipped by {interaction.user.mention}",
+            description=f"**{song_title}**",
             color=discord.Color.orange()
         )
+        embed.add_field(name="👤 Skipped By", value=interaction.user.mention, inline=True)
+        embed.add_field(name="📋 Songs in Queue", value=f"{queue_size} remaining", inline=True)
+        
+        if queue_size > 0:
+            embed.set_footer(text="▶️ Playing next song now")
+        else:
+            embed.set_footer(text="Queue is now empty")
+        
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="stop", description="Stops the song and clears the queue")
