@@ -222,7 +222,7 @@ class SearchButton(ui.Button):
             label = title
         
         # Use different colors for cached vs new
-        style = discord.ButtonStyle.green if is_cached else discord.ButtonStyle.gray
+        style = discord.ButtonStyle.green if is_cached else discord.ButtonStyle.blurple
         emoji = "💾" if is_cached else "☁️"
         
         super().__init__(style=style, label=label, emoji=emoji)
@@ -353,13 +353,31 @@ class Music(commands.Cog):
                     # Set flag to indicate this is a resumed session
                     player._resumed_from_state = True
                     
+                    # Build queue preview (up to 10 songs)
+                    queue_preview = ""
+                    songs_to_show = min(10, len(data['queue']))
+                    for i, song in enumerate(data['queue'][:songs_to_show], 1):
+                        title = song.get('title', 'Unknown')
+                        # Truncate long titles
+                        if len(title) > 50:
+                            title = title[:47] + "..."
+                        queue_preview += f"`{i}.` {title}\n"
+                    
+                    if len(data['queue']) > 10:
+                        queue_preview += f"\n*...and {len(data['queue']) - 10} more songs*"
+                    
                     # Send resume notification
                     resume_embed = discord.Embed(
                         title="🔄 Bot Resumed",
                         description="I'm back! Resuming playback from where we left off...",
                         color=discord.Color.blue()
                     )
-                    resume_embed.add_field(name="📋 Queue Status", value=f"{len(data['queue'])} song(s) in queue", inline=True)
+                    resume_embed.add_field(name="📋 Queue Status", value=f"**{len(data['queue'])}** song(s) queued", inline=False)
+                    
+                    if queue_preview:
+                        resume_embed.add_field(name="🎵 Up Next", value=queue_preview, inline=False)
+                    
+                    resume_embed.set_footer(text="▶️ Starting playback now")
                     await text_channel.send(embed=resume_embed)
                     
                     print(f"DEBUG: Restored queue for guild {guild.name}", flush=True)
@@ -477,6 +495,24 @@ class Music(commands.Cog):
             
             await player.queue.put(data)
             
+            # Start background download if not cached and not playing immediately
+            if not is_cache_hit and not will_play_immediately:
+                # Download in background without blocking
+                async def background_download():
+                    try:
+                        print(f"DEBUG: Starting background download for {data.get('title', 'Unknown')}", flush=True)
+                        # This will download and cache the file
+                        await self.bot.loop.run_in_executor(
+                            None,
+                            lambda: ytdl.extract_info(data['webpage_url'], download=True)
+                        )
+                        print(f"DEBUG: Background download complete for {data.get('title', 'Unknown')}", flush=True)
+                    except Exception as e:
+                        print(f"DEBUG: Background download failed: {e}", flush=True)
+                
+                # Start download task without awaiting (fire and forget)
+                self.bot.loop.create_task(background_download())
+            
             # Only show "Queued" message if song won't play immediately
             if not will_play_immediately:
                 # Create Embed for Public Queue Log
@@ -557,13 +593,13 @@ class Music(commands.Cog):
         # If Search Query, show menu
         search_query = f"ytsearch5:{search}"
         
-        # Send simple scanning message
+        # Send modern scanning message with blue theme
         embed = discord.Embed(
             title="🔍 Searching YouTube",
-            description=f"**{search}**",
-            color=discord.Color.gold()
+            description=f"**Query:** {search}\n\n🔄 Scanning YouTube's library...",
+            color=discord.Color.blue()
         )
-        embed.set_footer(text="⏳ This usually takes a few seconds")
+        embed.set_footer(text="⚡ This usually takes just a few seconds")
         scan_msg = await interaction.followup.send(embed=embed)
 
         try:
@@ -609,7 +645,7 @@ class Music(commands.Cog):
             results_embed = discord.Embed(
                 title="🎵 Found Your Tracks!",
                 description=f"I found **{len(entries[:5])} songs** for: **{search}**\n\n✨ Click a button below to play",
-                color=discord.Color.gold()
+                color=discord.Color.blue()
             )
             
             # Add cache info with colors
@@ -624,7 +660,7 @@ class Music(commands.Cog):
             if cache_info:
                 results_embed.add_field(name="📊 Cache Status", value=cache_info, inline=False)
             
-            results_embed.set_footer(text="🎵 Green = Cached | Gray = New Download")
+            results_embed.set_footer(text="🎵 Green = Cached | Blue = New Download")
             await scan_msg.edit(embed=results_embed, view=view)
 
         except Exception as e:
