@@ -99,6 +99,8 @@ class MusicPlayer:
         self.np = None  # Now playing message
         self.volume = .5
         self.current = None
+        self.playback_start_time = None  # Track when playback started
+        self.seek_position = 0  # Position to seek to when resuming (in seconds)
 
         self.bot.loop.create_task(self.player_loop())
 
@@ -131,30 +133,55 @@ class MusicPlayer:
                     
                     # Create source from local file (stream=False)
                     source = YTDLSource.create_from_data(source, stream=False, is_cached=is_cached)
-                except ValueError as e:
-                    await self.channel.send(f"{e}")
-                    continue
+                    # Convert to actual source at play time, handling download if needed
+                    source = await YTDLSource.from_data(data=source, loop=self.bot.loop, stream=False) # Assume downloaded for dicts
                 except Exception as e:
-                    await self.channel.send(f'Error creating audio source: {e}')
+                    print(f"Error converting data: {e}", flush=True)
+                    await self.channel.send(f"Error loading song: {e}")
                     continue
-            elif not isinstance(source, YTDLSource):
-                # Source was probably a stream (not downloaded) and not a dict
-                try:
-                    source = await YTDLSource.from_url(source, loop=self.bot.loop, stream=True)
-                except ValueError as e:
-                    await self.channel.send(f"{e}")
-                    continue
-                except Exception as e:
-                    await self.channel.send(f'There was an error processing your song.\n'
-                                            f'```css\n[{e}]\n```')
-            source.volume = self.volume
+            
+            # Now we have a YTDLSource object
             self.current = source
+
+            print(f"DEBUG: source type: {type(source)}", flush=True)
+            if hasattr(source, 'title'):
+                print(f"DEBUG: source.title: {source.title}", flush=True)
+
+            # Check if we need to seek to a specific position (resuming)
+            ffmpeg_opts = ffmpeg_options_local if source.is_cached else ffmpeg_options_stream
+            if self.seek_position > 0:
+                # Add seek option to start from specific position
+                before_opts = ffmpeg_opts.get('before_options', '')
+                if before_opts:
+                    before_opts += f" -ss {int(self.seek_position)}"
+                else:
+                    before_opts = f"-ss {int(self.seek_position)}"
+                
+                ffmpeg_opts = ffmpeg_opts.copy() # Create a copy to avoid modifying global dict
+                ffmpeg_opts['before_options'] = before_opts
+                print(f"DEBUG: Seeking to {int(self.seek_position)} seconds", flush=True)
+                self.seek_position = 0  # Reset after applying
+
+            # Create the actual FFmpegPCMAudio source with potential seek options
+            audio_source = discord.FFmpegPCMAudio(source.stream_url, **ffmpeg_opts)
+            # Wrap it in PCMVolumeTransformer
+            volume_source = discord.PCMVolumeTransformer(audio_source)
+            volume_source.volume = self.volume
+
+            # Copy essential properties from the YTDLSource to the new volume_source
+            # This allows the after_callback and embed creation to access them.
+            volume_source.title = self.current.title
+            volume_source.webpage_url = self.current.webpage_url
+            volume_source.thumbnail = self.current.thumbnail
+            volume_source.duration = self.current.duration
+            volume_source.is_cached = self.current.is_cached
+            volume_source.requested_by = self.current.requested_by
 
             # Save state when song starts
             self.bot.get_cog("Music").save_state()
 
             try:
-                print(f"DEBUG: Playing {source.title}", flush=True)
+                print(f"DEBUG: Playing {volume_source.title}", flush=True)
                 
                 def after_callback(error):
                     if error:
@@ -162,12 +189,13 @@ class MusicPlayer:
                     print("DEBUG: Song finished/stopped, triggering next...", flush=True)
                     self.bot.loop.call_soon_threadsafe(self.next.set)
 
-                self.guild.voice_client.play(source, after=after_callback)
+                # Track when playback starts
+                import time
+                self.playback_start_time = time.time()
+                
+                self.guild.voice_client.play(volume_source, after=after_callback)
                 
                 # Create Embed for Now Playing (Purple, Large Image)
-                embed = discord.Embed(title="Now Playing", description=f"[{source.title}]({source.webpage_url})", color=discord.Color.purple())
-                if source.thumbnail:
-                    embed.set_image(url=source.thumbnail)
                 if source.duration:
                     embed.add_field(name="Duration", value=f"{int(source.duration//60)}:{int(source.duration%60):02d}", inline=True)
                 
@@ -298,32 +326,28 @@ class Music(commands.Cog):
         """Saves the current queue and playing song to a file."""
         state = {}
         for guild_id, player in self.players.items():
-            queue_list = []
-            # Add current song if playing (so it restarts)
-            if player.current:
-                 if isinstance(player.current, YTDLSource):
-                     queue_list.append(player.current.data)
-                 elif isinstance(player.current, dict):
-                     queue_list.append(player.current)
+            queue_list = list(player.queue._queue)
             
-            # Add rest of queue
-            for item in player.queue._queue:
-                queue_list.append(item)
-
-            if queue_list:
-                # Only save if there's something to play
-                voice_channel_id = player.guild.voice_client.channel.id if player.guild.voice_client else None
-                if voice_channel_id:
-                    state[str(guild_id)] = {
-                        'voice_channel': voice_channel_id,
-                        'text_channel': player.channel.id,
-                        'queue': queue_list
-                    }
+            # Calculate current playback position if playing
+            current_position = 0
+            if player.current and player.playback_start_time:
+                elapsed = time.time() - player.playback_start_time
+                current_position = int(elapsed)
+            
+            # Only save if there's something in the queue or currently playing
+            if queue_list or player.current:
+                state[guild_id] = {
+                    'voice_channel': player.guild.voice_client.channel.id if player.guild.voice_client else None,
+                    'text_channel': player.channel.id,
+                    'queue': queue_list,
+                    'current_song': player.current.data if player.current else None,
+                    'current_position': current_position  # Save playback position
+                }
         
         try:
             with open('songs/state.json', 'w') as f:
                 json.dump(state, f)
-            print("DEBUG: State saved.", flush=True)
+            print("DEBUG: State saved with playback position.", flush=True)
         except Exception as e:
             print(f"Error saving state: {e}", flush=True)
 
@@ -368,6 +392,11 @@ class Music(commands.Cog):
                     for song_data in data['queue']:
                         await player.queue.put(song_data)
                     
+                    # Restore playback position if available
+                    if 'current_position' in data and data['current_position'] > 0:
+                        player.seek_position = data['current_position']
+                        print(f"DEBUG: Will resume from {data['current_position']} seconds", flush=True)
+                    
                     # Set flag to indicate this is a resumed session
                     player._resumed_from_state = True
                     
@@ -390,6 +419,13 @@ class Music(commands.Cog):
                         description="I'm back! Resuming playback from where we left off...",
                         color=discord.Color.blue()
                     )
+                    
+                    # Add position info if resuming mid-song
+                    if 'current_position' in data and data['current_position'] > 0:
+                        mins = int(data['current_position'] // 60)
+                        secs = int(data['current_position'] % 60)
+                        resume_embed.add_field(name="⏱️ Resume Point", value=f"{mins}:{secs:02d}", inline=True)
+                    
                     resume_embed.add_field(name="📋 Queue Status", value=f"**{len(data['queue'])}** song(s) queued", inline=False)
                     
                     if queue_preview:
@@ -666,14 +702,16 @@ class Music(commands.Cog):
             # Sort: cached songs first, then new downloads
             songs_with_cache_status.sort(key=lambda x: (not x['is_cached'], x['title']))
             
-            # Add buttons in vertical order (one per row)
-            for song in songs_with_cache_status:
+            # Add buttons in vertical list (one per row)
+            for i, song in enumerate(songs_with_cache_status):
                 button = SearchButton(song['title'], song['url'], song['is_cached'], self, interaction.user)
+                # Assign each button to its own row for vertical stacking
+                button.row = i
                 view.add_item(button)
 
             # Edit the scanning message to show clean bubble list
             results_embed = discord.Embed(
-                title="🎵 Select a Track",
+                title="🎵 Select a Song",
                 description="Cached songs are shown first:",
                 color=discord.Color.blue()
             )
