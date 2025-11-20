@@ -202,9 +202,21 @@ class MusicPlayer:
                     embed.add_field(name="Requested By", value=source.requested_by, inline=True)
                 
                 # Check if this is a resumed playback after bot restart
+                # Only show footer if we actually resumed from a position (not just started from beginning)
+                show_resumed_footer = False
                 if hasattr(self, '_resumed_from_state') and self._resumed_from_state:
-                    embed.set_footer(text="🔄 Resumed after bot restart", icon_url=None)
-                    self._resumed_from_state = False  # Reset flag
+                    # Check if this song had a resume position marker
+                    if isinstance(source, YTDLSource) and hasattr(source, 'data'):
+                        if '_resume_position' in source.data and source.data['_resume_position'] > 0:
+                            show_resumed_footer = True
+                    # Clear the flag after first song (whether resumed or not)
+                    self._resumed_from_state = False
+                
+                if show_resumed_footer:
+                    resume_pos = source.data['_resume_position']
+                    mins = int(resume_pos // 60)
+                    secs = int(resume_pos % 60)
+                    embed.set_footer(text=f"🔄 Resumed after bot restart at {mins}:{secs:02d}", icon_url=None)
                 
                 self.np = await self.channel.send(embed=embed)
             except Exception as e:
@@ -392,6 +404,11 @@ class Music(commands.Cog):
                     # Populate queue
                     for song_data in data['queue']:
                         await player.queue.put(song_data)
+                    
+                    # Only send resume notification if we actually have songs to resume
+                    if not data['queue']:
+                        print(f"DEBUG: Queue was empty, skipping resume notification", flush=True)
+                        continue
                     
                     # Check if first song has a resume position marker
                     if data['queue'] and '_resume_position' in data['queue'][0]:
