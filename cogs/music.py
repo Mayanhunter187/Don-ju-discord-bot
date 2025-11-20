@@ -225,11 +225,7 @@ class SearchView(ui.View):
         
         await interaction.response.edit_message(content="Search cancelled.", view=None, embed=None)
 
-                    print(f"Deleted {path} to free space.")
-                    if total_size <= max_size:
-                        break
-                except Exception as e:
-                    print(f"Error deleting {path}: {e}")
+
 
     async def cleanup(self, guild):
         try:
