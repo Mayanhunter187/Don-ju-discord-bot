@@ -467,7 +467,7 @@ class Music(commands.Cog):
             initial_msg = random.choice(flavor_texts["cache"]).format(query=cached_data.get('title', query))
             data = cached_data
         else:
-            initial_msg = f"📡 **Establishing Connection...** Accessing `{query}`..."
+            initial_msg = f"� **Establishing Connection...**\n\nAccessing: `{query}`"
 
         # Send/Update status using edit_original_response (works for both deferred commands and button interactions)
         try:
@@ -637,12 +637,13 @@ class Music(commands.Cog):
 
             view = SearchView(self, interaction.user)
             
-            # Process top 5 results and add buttons (no redundant list)
+            # Process top 5 results and check cache status
             entries = list(data['entries'])
+            songs_with_cache_status = []
             cached_count = 0
             new_count = 0
             
-            for i, entry in enumerate(entries[:5], 1):
+            for entry in entries[:5]:
                 title = entry.get('title', 'Unknown Title')
                 url = entry.get('url', '')
                 video_id = entry.get('id')
@@ -656,13 +657,24 @@ class Music(commands.Cog):
                      else:
                          new_count += 1
                 
-                # Add button
-                view.add_item(SearchButton(title, url, is_cached, self, interaction.user))
+                songs_with_cache_status.append({
+                    'title': title,
+                    'url': url,
+                    'is_cached': is_cached
+                })
+            
+            # Sort: cached songs first, then new downloads
+            songs_with_cache_status.sort(key=lambda x: (not x['is_cached'], x['title']))
+            
+            # Add buttons in vertical order (one per row)
+            for song in songs_with_cache_status:
+                button = SearchButton(song['title'], song['url'], song['is_cached'], self, interaction.user)
+                view.add_item(button)
 
             # Edit the scanning message to show clean bubble list
             results_embed = discord.Embed(
                 title="🎵 Select a Track",
-                description="Choose from the options below:",
+                description="Cached songs are shown first:",
                 color=discord.Color.blue()
             )
             
@@ -670,7 +682,7 @@ class Music(commands.Cog):
             if entries and entries[0].get('thumbnail'):
                 results_embed.set_thumbnail(url=entries[0]['thumbnail'])
             
-            results_embed.set_footer(text="🟢 Cached | 🔵 New")
+            results_embed.set_footer(text="🟢 Cached (Instant) | 🔵 New Download")
             await scan_msg.edit(embed=results_embed, view=view)
 
         except Exception as e:
