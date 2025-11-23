@@ -11,14 +11,23 @@ jobs:
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.0
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
         with:
           host: ${{ secrets.HOST_IP }}
           username: root
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           timeout: 30m
+          envs: DISCORD_TOKEN
           script: |
             # Stop on any error
             set -e
+
+            # Update Secret in Kubernetes
+            echo "Updating Kubernetes secret..."
+            kubectl create secret generic discord-bot-secret \
+              --from-literal=token=$DISCORD_TOKEN \
+              --dry-run=client -o yaml | kubectl apply -f -
 
             APP_DIR="/root/discord-music-bot"
             mkdir -p $APP_DIR
