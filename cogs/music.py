@@ -182,6 +182,9 @@ class MusicPlayer:
                 
                 self.guild.voice_client.play(source, after=after_callback)
                 
+                # Set bot status to "Listening to [Song Name]"
+                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=source.title))
+                
                 # Save state AFTER playback has started (so playback_start_time is set)
                 
                 # Create Embed for Now Playing (Purple, Large Image)
@@ -244,6 +247,9 @@ class MusicPlayer:
                 print(f"DEBUG: Error cleaning up source: {e}", flush=True)
             
             self.current = None
+            # Reset status to default when song ends
+            await self.bot.get_cog("Music").set_default_status()
+            
             # Save state when song ends
             self.bot.get_cog("Music").save_state()
 
@@ -478,8 +484,25 @@ class Music(commands.Cog):
             del self.players[guild.id]
         except KeyError:
             pass
-        
-        self.save_state()
+            
+        # Reset status if no other guilds are playing
+        if not any(p.guild.voice_client and p.guild.voice_client.is_playing() for p in self.players.values()):
+            await self.set_default_status()
+
+    async def set_default_status(self):
+        """Sets the bot's status to the default 'The Don'ju'."""
+        await self.bot.change_presence(activity=discord.Game(name="The Don'ju | /help"))
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Sets default status when cog is ready."""
+        await self.set_default_status()
+        # Load state if exists
+        await self.load_state()
+
+    async def __local_check(self, interaction: discord.Interaction):
+        # A local check which applies to all commands in this cog.
+        return True
 
     def get_player(self, interaction):
         try:
@@ -1091,6 +1114,57 @@ class Music(commands.Cog):
                 embed.add_field(name="📊 Largest Files", value=top_files, inline=False)
         
         embed.set_footer(text="💡 Use /play to cache more songs automatically")
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="playing", description="Shows the currently playing song")
+    async def now_playing(self, interaction: discord.Interaction):
+        """Shows the currently playing song."""
+        # Check if user is in a voice channel
+        if not interaction.user.voice:
+            return await interaction.response.send_message('❌ You need to be in a voice channel to see what\'s playing!', ephemeral=True)
+        
+        player = self.get_player(interaction)
+        if not player or not player.current:
+            return await interaction.response.send_message('❌ Nothing is currently playing!', ephemeral=True)
+        
+        source = player.current
+        
+        # Create Embed for Now Playing
+        embed = discord.Embed(title="Now Playing", description=f"[{source.title}]({source.webpage_url})", color=discord.Color.purple())
+        
+        if source.thumbnail:
+            embed.set_image(url=source.thumbnail)
+            
+        if source.duration:
+            # Calculate progress
+            current_pos = 0
+            if player.playback_start_time:
+                current_pos = int(time.time() - player.playback_start_time)
+            
+            # Adjust for seek position if resumed
+            if hasattr(player, 'seek_position') and player.seek_position > 0:
+                 # This is tricky because seek_position is reset after play starts
+                 # But we can try to estimate if we track it better. 
+                 # For now, simple elapsed time is best effort.
+                 pass
+
+            total_mins = int(source.duration // 60)
+            total_secs = int(source.duration % 60)
+            
+            curr_mins = int(current_pos // 60)
+            curr_secs = int(current_pos % 60)
+            
+            embed.add_field(name="Duration", value=f"{curr_mins}:{curr_secs:02d} / {total_mins}:{total_secs:02d}", inline=True)
+        
+        if source.requested_by:
+            embed.add_field(name="Requested By", value=source.requested_by, inline=True)
+            
+        # Add Cache Status
+        if source.is_cached:
+            embed.set_footer(text="💾 Playing from Cache")
+        else:
+            embed.set_footer(text="☁️ Streaming from YouTube")
+            
         await interaction.response.send_message(embed=embed)
 
 async def setup(bot):
