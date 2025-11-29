@@ -7,3 +7,10 @@ env/
 venv/
 .vscode/
 *.log
+
+# Secrets
+secrets/*
+!secrets/example.env
+cookies.txt
+docker-compose.override.yml
+songs/

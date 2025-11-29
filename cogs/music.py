@@ -23,7 +23,7 @@ ytdl_format_options = {
     'no_warnings': False,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
-    'cookiefile': '/app/cookies.txt',
+    'cookiefile': os.getenv('COOKIES_FILE_PATH', '/app/cookies.txt'),
     'verbose': True,
     'extractor_args': {
         'youtube': {
