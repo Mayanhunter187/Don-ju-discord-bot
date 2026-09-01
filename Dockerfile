@@ -4,6 +4,9 @@ FROM python:3.11-slim
 # Get static ffmpeg (lightweight, no X11 dependencies)
 COPY --from=mwader/static-ffmpeg:6.0 /ffmpeg /usr/local/bin/
 COPY --from=mwader/static-ffmpeg:6.0 /ffprobe /usr/local/bin/
+COPY --from=mwader/static-ffmpeg:6.0 /ffmpeg /usr/local/bin/
+COPY --from=mwader/static-ffmpeg:6.0 /ffprobe /usr/local/bin/
+COPY --from=node:22-slim /usr/local/bin/node /usr/local/bin/
 
 # Set the working directory in the container
 WORKDIR /app
