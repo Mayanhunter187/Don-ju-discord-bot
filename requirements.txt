@@ -1,3 +1,5 @@
+discord.py[voice]
+davey
 discord.py
 PyNaCl
 python-dotenv
