@@ -27,7 +27,7 @@ ytdl_format_options = {
     'verbose': True,
     'extractor_args': {
         'youtube': {
-            'player_client': ['web']
+            'player_client': ['ios', 'web']
         }
     },
     'js_runtimes': {
