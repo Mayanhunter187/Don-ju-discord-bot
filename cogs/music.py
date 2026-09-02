@@ -11,7 +11,7 @@ import time
 
 # YouTube DL options
 ytdl_format_options = {
-    'format': 'bestaudio/best',
+    'format': 'ba/b',
     'outtmpl': 'songs/%(id)s.%(ext)s',
     'writeinfojson': True,
     'restrictfilenames': True,
