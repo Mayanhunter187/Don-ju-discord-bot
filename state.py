@@ -12,6 +12,9 @@ import aiohttp
 STATE_FILE = 'songs/state.json'
 # Writes to the ConfigMap are at most this often; save() can be called far more
 WRITE_INTERVAL = 2
+# API calls can time out while etcd stalls, so loading the state retries
+ATTEMPTS = 4
+RETRY_DELAY = 2
 
 
 class StateStore:
@@ -42,8 +45,13 @@ class StateStore:
 
     async def flush(self):
         """Write the latest state now (used on shutdown)."""
-        if self.kube is not None and self.latest is not None:
-            await self._write_configmap(self.latest)
+        if self.kube is None or self.latest is None:
+            return
+        # Two tries keeps shutdown well inside the pod's 30s termination grace period
+        for attempt in range(2):
+            if await self._write_configmap(self.latest):
+                return
+            await asyncio.sleep(RETRY_DELAY)
 
     async def load(self):
         if self.kube is None:
@@ -51,12 +59,18 @@ class StateStore:
                 return {}
             with open(STATE_FILE) as f:
                 return json.load(f)
-        status, cm = await self.kube.request('GET', self.path)
-        if status == 404:
-            return {}
-        if status != 200:
-            raise RuntimeError(f"reading ConfigMap {self.configmap}: HTTP {status}")
-        return json.loads((cm.get('data') or {}).get('state.json') or '{}')
+        for attempt in range(ATTEMPTS):
+            try:
+                status, cm = await self.kube.request('GET', self.path)
+                if status == 404:
+                    return {}
+                if status == 200:
+                    return json.loads((cm.get('data') or {}).get('state.json') or '{}')
+                print(f"Error loading state: HTTP {status}", flush=True)
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+                print(f"Error loading state: {e!r}", flush=True)
+            await asyncio.sleep(RETRY_DELAY)
+        raise RuntimeError(f"could not read ConfigMap {self.configmap}")
 
     def _write_file(self, state):
         try:
@@ -79,7 +93,9 @@ class StateStore:
                     'metadata': {'name': self.configmap},
                     'data': data,
                 })
-            if status not in (200, 201):
-                print(f"Error saving state: HTTP {status}", flush=True)
+            if status in (200, 201):
+                return True
+            print(f"Error saving state: HTTP {status}", flush=True)
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
             print(f"Error saving state: {e!r}", flush=True)
+        return False

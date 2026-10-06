@@ -25,7 +25,7 @@ ytdl_format_options = {
     'default_search': 'auto',
     'source_address': '0.0.0.0',
     'cookiefile': os.getenv('COOKIES_FILE_PATH', '/app/cookies.txt'),
-    'verbose': True,
+    'verbose': False,
     'extractor_args': {
         'youtube': {
             'player_client': ['android', 'web']

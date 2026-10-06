@@ -28,7 +28,8 @@ class KubeClient:
     async def request(self, method, path, body=None, content_type='application/json'):
         """Return (status, parsed JSON body). Raises on network errors and timeouts."""
         if self.session is None:
-            self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5))
+            # etcd on the cluster's disks can stall for several seconds
+            self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
         # Read the token every time; the kubelet rotates it
         with open(f'{SA_DIR}/token') as f:
             token = f.read().strip()
