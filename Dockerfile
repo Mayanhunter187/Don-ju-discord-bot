@@ -23,5 +23,5 @@ RUN pip install --no-cache-dir --upgrade -r requirements.txt
 # Copy the app
 COPY . /app
 
-# Run main.py
-CMD ["sh", "-c", "cp /tmp/cookies-ro/cookies.txt /app/cookies.txt && python main.py"]
+# Run main.py; exec so SIGTERM reaches Python and the bot can hand over cleanly
+CMD ["sh", "-c", "cp /tmp/cookies-ro/cookies.txt /app/cookies.txt && exec python main.py"]

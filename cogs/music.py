@@ -59,6 +59,14 @@ ytdl_slots = asyncio.Semaphore(2)
 CACHE_MAX_BYTES = int(os.getenv('CACHE_MAX_BYTES', 4 * 1024**3))
 CACHE_TEMP_SUFFIXES = ('.part', '.ytdl', '.temp')
 
+# Fields of a song's info dict kept in the saved queue. The full dict is
+# hundreds of KB, too big for the ConfigMap the queue is saved to.
+STATE_SONG_KEYS = ('id', 'ext', 'title', 'webpage_url', 'duration', 'thumbnail',
+                   'uploader', 'requested_by', '_resume_position')
+
+def trim_song(song):
+    return {k: song[k] for k in STATE_SONG_KEYS if k in song}
+
 def _run_ytdl(url, kwargs):
     with yt_dlp.YoutubeDL(ytdl_format_options) as ydl:
         data = ydl.extract_info(url, **kwargs)
@@ -355,7 +363,24 @@ class Music(commands.Cog):
         self.bot = bot
         self.players = {}
         self.state_loaded = False
+        self.store = bot.state_store
+        self.store_task = None
+        self.frozen = False  # set on shutdown so the final saved state isn't overwritten
         self.cleanup_partial_files()
+
+    async def cog_load(self):
+        if self.store.kube:
+            self.store_task = asyncio.create_task(self.store.run())
+
+    async def cog_unload(self):
+        if self.store_task:
+            self.store_task.cancel()
+
+    async def shutdown(self):
+        """Save the queue for whichever replica takes over, then stop saving."""
+        self.save_state()
+        self.frozen = True
+        await self.store.flush()
 
     def cleanup_cache(self):
         """Evict least recently played songs until the cache fits CACHE_MAX_BYTES."""
@@ -410,7 +435,9 @@ class Music(commands.Cog):
                     print(f"Failed to delete {filename}: {e}")
 
     def save_state(self):
-        """Saves the current queue and playback state to disk."""
+        """Saves the current queue and playback state."""
+        if self.frozen:
+            return
         state = {}
         for guild_id, player in self.players.items():
             queue_list = []
@@ -424,12 +451,12 @@ class Music(commands.Cog):
             # Add currently playing song to the front of the queue with position
             if player.current:
                 if isinstance(player.current, YTDLSource):
-                    current_song_data = player.current.data.copy()
+                    current_song_data = trim_song(player.current.data)
                     current_song_data['_resume_position'] = current_position  # Special marker
                     queue_list.append(current_song_data)
             
             # Add rest of queue
-            queue_list.extend(list(player.queue._queue))
+            queue_list.extend(trim_song(song) for song in player.queue._queue if isinstance(song, dict))
             
             # Only save if there's something in the queue
             if queue_list:
@@ -439,26 +466,15 @@ class Music(commands.Cog):
                     'queue': queue_list
                 }
         
-        try:
-            # Write then rename, so a crash mid-write can't leave a corrupt file
-            with open('songs/state.json.tmp', 'w') as f:
-                json.dump(state, f)
-            os.replace('songs/state.json.tmp', 'songs/state.json')
-            print("DEBUG: State saved with playback position.", flush=True)
-        except Exception as e:
-            print(f"Error saving state: {e}", flush=True)
+        self.store.save(state)
 
     async def load_state(self):
-        """Loads the queue from file on startup."""
+        """Loads the saved queue on startup."""
         await self.bot.wait_until_ready()
-        if not os.path.exists('songs/state.json'):
-            return
-            
         print("DEBUG: Loading state...", flush=True)
         try:
-            with open('songs/state.json', 'r') as f:
-                state = json.load(f)
-                
+            state = await self.store.load()
+
             for guild_id_str, data in state.items():
                 guild_id = int(guild_id_str)
                 guild = self.bot.get_guild(guild_id)
