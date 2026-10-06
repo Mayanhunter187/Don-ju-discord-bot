@@ -1,0 +1,42 @@
+# Lets the bot hold its leader Lease and save the queue to a ConfigMap
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: discord-music-bot
+  namespace: don-ju
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: discord-music-bot
+  namespace: don-ju
+rules:
+  # create can't be limited by name, so it gets its own rules
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["don-ju-leader"]
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["don-ju-state"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: discord-music-bot
+  namespace: don-ju
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: discord-music-bot
+subjects:
+  - kind: ServiceAccount
+    name: discord-music-bot
+    namespace: don-ju

@@ -1,0 +1,11 @@
+# Node drains take down at most one replica, so the standby is always there
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: discord-music-bot
+  namespace: don-ju
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: discord-music-bot

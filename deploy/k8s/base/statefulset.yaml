@@ -1,0 +1,82 @@
+# Two replicas on different nodes. Only the one holding the don-ju-leader Lease
+# connects to Discord; the other waits as a hot standby. On a rollout or drain
+# the leader saves the queue, releases the lease, and the standby resumes
+# playback within a couple of seconds. If the leader's node dies, the standby
+# takes over once the lease expires (30s).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: discord-music-bot
+  namespace: don-ju
+  labels:
+    app: discord-music-bot
+spec:
+  serviceName: discord-music-bot
+  replicas: 2
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: discord-music-bot
+  template:
+    metadata:
+      labels:
+        app: discord-music-bot
+    spec:
+      serviceAccountName: discord-music-bot
+      terminationGracePeriodSeconds: 30
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: discord-music-bot
+      containers:
+        - name: discord-music-bot
+          image: ghcr.io/mayanhunter187/don-ju-discord-bot:20261006-7295461
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DISCORD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: discord-bot-secret
+                  key: token
+          # The bot touches this file every 5s while its event loop is healthy
+          readinessProbe:
+            exec:
+              command: ["python", "-c", "import os,sys,time; sys.exit(time.time() - os.path.getmtime('/tmp/heartbeat') > 20)"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["python", "-c", "import os,sys,time; sys.exit(time.time() - os.path.getmtime('/tmp/heartbeat') > 60)"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          volumeMounts:
+            - name: cookies
+              mountPath: /tmp/cookies-ro
+              readOnly: true
+            - name: songs
+              mountPath: /app/songs
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 250m
+            limits:
+              # Python plus up to two yt-dlp Node.js solvers (see ytdl_slots)
+              memory: 1Gi
+              cpu: 500m
+      volumes:
+        - name: cookies
+          secret:
+            secretName: youtube-cookies
+  # Each replica keeps its own song cache on its node
+  volumeClaimTemplates:
+    - metadata:
+        name: songs
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 5Gi

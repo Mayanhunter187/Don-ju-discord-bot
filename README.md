@@ -25,7 +25,7 @@ The bot runs on the homelab k3s cluster, in the `don-ju` namespace.
 1. A push to `main` that touches code builds an image with GitHub Actions and
    pushes it to `ghcr.io/mayanhunter187/don-ju-discord-bot` with the tag
    `<date>-<short sha>`.
-2. Update the image tag in `deploy/k8s/base/deployment.yaml` and push.
+2. Update the image tag in `deploy/k8s/base/statefulset.yaml` and push.
 3. Argo CD keeps `deploy/k8s/base` applied to the cluster.
 
 The Argo CD Application and both Secrets are created by the
@@ -37,9 +37,30 @@ values come from AWS SSM Parameter Store:
 | `discord-bot-secret` | `token` | `/homelab/don-ju/discord-token` |
 | `youtube-cookies` | `cookies.txt` | `/homelab/don-ju/youtube-cookies` |
 
-The song cache and the saved queue (`songs/state.json`) live on the
-`don-ju-songs` PersistentVolumeClaim. The least recently played songs are
-evicted once the cache passes `CACHE_MAX_BYTES` (default 4 GiB).
+### High availability
+
+Two replicas run on different nodes. Only the one holding the `don-ju-leader`
+Lease connects to Discord; the other waits as a hot standby.
+
+- On a rollout or node drain, the leader saves the queue, disconnects and
+  releases the lease. The standby takes over within a couple of seconds and
+  resumes the current song where it left off.
+- If the leader's node dies, the standby takes over once the lease expires
+  (30 seconds).
+
+The queue is saved to the `don-ju-state` ConfigMap, so either replica can
+resume it. Each replica keeps its own song cache on a `local-path` volume. The
+least recently played songs are evicted once a cache passes `CACHE_MAX_BYTES`
+(default 4 GiB).
+
+The bot is in too few servers to need sharding; Discord requires it only from
+2,500 guilds, and a guild is always served by a single shard either way.
+
+To see which replica is leading:
+
+```bash
+kubectl -n don-ju get lease don-ju-leader -o jsonpath='{.spec.holderIdentity}'
+```
 
 ## Running locally
 
@@ -52,6 +73,9 @@ pip install -r requirements.txt
 echo "DISCORD_TOKEN=..." > .env
 COOKIES_FILE_PATH=./cookies.txt python main.py
 ```
+
+Outside Kubernetes the bot skips leader election and saves the queue to
+`songs/state.json`.
 
 `cookies.txt` is a Netscape-format cookie export from a logged-in YouTube
 session.
