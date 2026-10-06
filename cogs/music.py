@@ -14,6 +14,7 @@ ytdl_format_options = {
     'format': 'ba/b',
     'outtmpl': 'songs/%(id)s.%(ext)s',
     'writeinfojson': True,
+    'updatetime': False,  # mtime = download time, which cache eviction relies on
     'restrictfilenames': True,
     'noplaylist': True,
     'nocheckcertificate': True,
@@ -45,7 +46,31 @@ ffmpeg_options_local = {
     'options': '-vn'
 }
 
+# Only used to work out file paths; extraction gets its own instance per call
+# because YoutubeDL is not thread-safe
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
+
+# Each extraction can start a Node.js process (~200MB) to solve YouTube's JS
+# challenges. Cap how many run at once so overlapping /play requests can't
+# push the pod past its memory limit.
+ytdl_slots = asyncio.Semaphore(2)
+
+# Keep the song cache under this size; least recently played songs go first
+CACHE_MAX_BYTES = int(os.getenv('CACHE_MAX_BYTES', 4 * 1024**3))
+CACHE_TEMP_SUFFIXES = ('.part', '.ytdl', '.temp')
+
+def _run_ytdl(url, kwargs):
+    with yt_dlp.YoutubeDL(ytdl_format_options) as ydl:
+        data = ydl.extract_info(url, **kwargs)
+        # Search results can be a lazy generator; resolve it while ydl is open
+        if data and 'entries' in data:
+            data['entries'] = list(data['entries'])
+        return data
+
+async def extract_info(url, **kwargs):
+    """Run yt-dlp off the event loop, at most ytdl_slots at a time."""
+    async with ytdl_slots:
+        return await asyncio.get_running_loop().run_in_executor(None, _run_ytdl, url, kwargs)
 
 class YTDLSource(discord.PCMVolumeTransformer):
     def __init__(self, source, *, data, volume=0.5, is_cached=False):
@@ -70,8 +95,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
     @classmethod
     async def get_info(cls, url, *, loop=None, stream=False):
-        loop = loop or asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
+        data = await extract_info(url, download=not stream)
 
         if 'entries' in data:
             # take first item from a playlist
@@ -113,6 +137,7 @@ class MusicPlayer:
         self.current = None
         self.playback_start_time = None  # Track when playback started
         self.seek_position = 0  # Position to seek to when resuming (in seconds)
+        self.save_task = None  # Saves state every 10s while a song plays
 
         self.bot.loop.create_task(self.player_loop())
 
@@ -139,10 +164,13 @@ class MusicPlayer:
                     if not is_cached:
                         # Cleanup cache if needed
                         self.bot.get_cog("Music").cleanup_cache()
-                        
+
                         # Download
-                        await self.bot.loop.run_in_executor(None, lambda: ytdl.extract_info(source['webpage_url'], download=True))
-                    
+                        await extract_info(source['webpage_url'], download=True)
+                    else:
+                        # Mark as recently played so cache eviction keeps it
+                        os.utime(filename)
+
                     # Create source from local file (stream=False), applying seek if resuming
                     source = YTDLSource.create_from_data(source, stream=False, is_cached=is_cached, seek_offset=self.seek_position)
                     # Reset seek position after applying
@@ -229,7 +257,10 @@ class MusicPlayer:
                         self.bot.get_cog("Music").save_state()
                         await asyncio.sleep(10)  # Save every 10 seconds
                 
-                self.bot.loop.create_task(periodic_save())
+                # A skip within 10s would otherwise leave the old loop running too
+                if self.save_task:
+                    self.save_task.cancel()
+                self.save_task = self.bot.loop.create_task(periodic_save())
             except Exception as e:
                 print(f"DEBUG: Exception in play: {e}", flush=True)
                 await self.channel.send(f"Error starting playback: {e}")
@@ -323,19 +354,56 @@ class Music(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.players = {}
+        self.state_loaded = False
         self.cleanup_partial_files()
-        self.bot.loop.create_task(self.load_state())
-    
+
     def cleanup_cache(self):
-        self.cleanup_partial_files()
+        """Evict least recently played songs until the cache fits CACHE_MAX_BYTES."""
+        if not os.path.exists('songs'):
+            return
+
+        # Never evict a song that is playing or queued
+        in_use = set()
+        for player in self.players.values():
+            if isinstance(player.current, YTDLSource):
+                in_use.add(player.current.data.get('id'))
+            for song in list(player.queue._queue):
+                if isinstance(song, dict):
+                    in_use.add(song.get('id'))
+
+        total = 0
+        audio = []  # (mtime, size, video_id, path)
+        for filename in os.listdir('songs'):
+            path = os.path.join('songs', filename)
+            if not os.path.isfile(path):
+                continue
+            size = os.path.getsize(path)
+            total += size
+            if filename.endswith('.json') or filename.endswith(CACHE_TEMP_SUFFIXES):
+                continue
+            audio.append((os.path.getmtime(path), size, filename.rsplit('.', 1)[0], path))
+
+        for _, size, video_id, path in sorted(audio):
+            if total <= CACHE_MAX_BYTES:
+                break
+            if video_id in in_use:
+                continue
+            info_path = os.path.join('songs', f'{video_id}.info.json')
+            for victim in (path, info_path):
+                try:
+                    total -= os.path.getsize(victim)
+                    os.remove(victim)
+                except FileNotFoundError:
+                    pass
+            print(f"Evicted {video_id} from cache", flush=True)
 
     def cleanup_partial_files(self):
         """Clean up .part, .ytdl, and .temp files on startup."""
         if not os.path.exists('songs'):
             return
-            
+
         for filename in os.listdir('songs'):
-            if filename.endswith(('.part', '.ytdl', '.temp')):
+            if filename.endswith(CACHE_TEMP_SUFFIXES):
                 try:
                     os.remove(os.path.join('songs', filename))
                 except Exception as e:
@@ -372,8 +440,10 @@ class Music(commands.Cog):
                 }
         
         try:
-            with open('songs/state.json', 'w') as f:
+            # Write then rename, so a crash mid-write can't leave a corrupt file
+            with open('songs/state.json.tmp', 'w') as f:
                 json.dump(state, f)
+            os.replace('songs/state.json.tmp', 'songs/state.json')
             print("DEBUG: State saved with playback position.", flush=True)
         except Exception as e:
             print(f"Error saving state: {e}", flush=True)
@@ -497,8 +567,10 @@ class Music(commands.Cog):
     async def on_ready(self):
         """Sets default status when cog is ready."""
         await self.set_default_status()
-        # Load state if exists
-        await self.load_state()
+        # on_ready fires again on every gateway reconnect; only restore once
+        if not self.state_loaded:
+            self.state_loaded = True
+            await self.load_state()
 
     async def __local_check(self, interaction: discord.Interaction):
         # A local check which applies to all commands in this cog.
@@ -608,10 +680,8 @@ class Music(commands.Cog):
                     try:
                         print(f"DEBUG: Starting background download for {data.get('title', 'Unknown')}", flush=True)
                         # This will download and cache the file
-                        await self.bot.loop.run_in_executor(
-                            None,
-                            lambda: ytdl.extract_info(data['webpage_url'], download=True)
-                        )
+                        self.cleanup_cache()
+                        await extract_info(data['webpage_url'], download=True)
                         print(f"DEBUG: Background download complete for {data.get('title', 'Unknown')}", flush=True)
                     except Exception as e:
                         print(f"DEBUG: Background download failed: {e}", flush=True)
@@ -740,10 +810,7 @@ class Music(commands.Cog):
         scan_msg = await interaction.followup.send(embed=embed)
 
         try:
-            data = await self.bot.loop.run_in_executor(
-                None, 
-                lambda: ytdl.extract_info(search_query, download=False, process=False)
-            )
+            data = await extract_info(search_query, download=False, process=False)
             
             if 'entries' not in data or not data['entries']:
                 error_embed = discord.Embed(

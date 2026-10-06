@@ -40,9 +40,8 @@ class Help(commands.Cog):
             
             # Playback Controls
             playback_cmds = [
-                ("play", "Play a song from YouTube (URL or search)"),
-                ("pause", "Pause the current song"),
-                ("resume", "Resume playback"),
+                ("play", "Play a song from YouTube (URL, search, or `random` for a cached song)"),
+                ("playing", "Show the current song and its progress"),
                 ("skip", "Skip to the next song"),
                 ("stop", "Stop playback and clear the queue")
             ]

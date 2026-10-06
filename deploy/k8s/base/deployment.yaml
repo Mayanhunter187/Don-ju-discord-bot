@@ -38,7 +38,8 @@ spec:
               memory: 256Mi
               cpu: 250m
             limits:
-              memory: 512Mi
+              # Python plus up to two yt-dlp Node.js solvers (see ytdl_slots)
+              memory: 1Gi
               cpu: 500m
       volumes:
         - name: cookies

@@ -10,7 +10,5 @@ venv/
 
 # Secrets
 secrets/*
-!secrets/example.env
 cookies.txt
-docker-compose.override.yml
 songs/
