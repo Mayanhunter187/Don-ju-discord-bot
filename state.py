@@ -4,10 +4,15 @@ In the cluster it goes in a ConfigMap, so whichever replica takes over can
 resume it. Run locally, it goes in songs/state.json.
 """
 import asyncio
+import logging
 import json
 import os
 
 import aiohttp
+
+import metrics
+
+log = logging.getLogger(__name__)
 
 STATE_FILE = 'songs/state.json'
 # Writes to the ConfigMap are at most this often; save() can be called far more
@@ -66,9 +71,9 @@ class StateStore:
                     return {}
                 if status == 200:
                     return json.loads((cm.get('data') or {}).get('state.json') or '{}')
-                print(f"Error loading state: HTTP {status}", flush=True)
+                log.warning(f"Error loading state: HTTP {status}")
             except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
-                print(f"Error loading state: {e!r}", flush=True)
+                log.warning(f"Error loading state: {e!r}")
             await asyncio.sleep(RETRY_DELAY)
         raise RuntimeError(f"could not read ConfigMap {self.configmap}")
 
@@ -79,7 +84,8 @@ class StateStore:
                 json.dump(state, f)
             os.replace(STATE_FILE + '.tmp', STATE_FILE)
         except Exception as e:
-            print(f"Error saving state: {e}", flush=True)
+            metrics.STATE_SAVE_ERRORS.inc()
+            log.warning(f"Error saving state: {e}")
 
     async def _write_configmap(self, state):
         data = {'state.json': json.dumps(state)}
@@ -95,7 +101,9 @@ class StateStore:
                 })
             if status in (200, 201):
                 return True
-            print(f"Error saving state: HTTP {status}", flush=True)
+            log.warning(f"Error saving state: HTTP {status}")
+            metrics.STATE_SAVE_ERRORS.inc()
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
-            print(f"Error saving state: {e!r}", flush=True)
+            metrics.STATE_SAVE_ERRORS.inc()
+            log.warning(f"Error saving state: {e!r}")
         return False

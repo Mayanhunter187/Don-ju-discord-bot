@@ -6,10 +6,15 @@ clock. A leader that shuts down cleanly releases the lease so a standby can
 take over straight away.
 """
 import asyncio
+import logging
 import time
 from datetime import datetime, timezone
 
 import aiohttp
+
+import metrics
+
+log = logging.getLogger(__name__)
 
 # A standby takes over this long after the leader stops renewing. Kept well
 # above the multi-second etcd stalls seen on the cluster's disks.
@@ -25,8 +30,9 @@ def _now():
 
 
 class LeaderElector:
-    def __init__(self, kube, name, identity):
+    def __init__(self, kube, name, identity, clock=time.monotonic):
         self.kube = kube
+        self.clock = clock
         self.name = name
         self.identity = identity
         self.collection = f'/apis/coordination.k8s.io/v1/namespaces/{kube.namespace}/leases'
@@ -55,21 +61,20 @@ class LeaderElector:
                 self.holder = self.identity if status == 201 else None
                 return status == 201
             if status != 200:
-                print(f"Lease read failed: HTTP {status}", flush=True)
+                log.warning(f"Lease read failed: HTTP {status}")
                 return False
 
             spec = lease.get('spec') or {}
             self.holder = spec.get('holderIdentity') or ''
             version = lease['metadata']['resourceVersion']
             if self.observed is None or self.observed[0] != version:
-                self.observed = (version, time.monotonic())
+                self.observed = (version, self.clock())
 
             if self.holder and self.holder != self.identity:
                 duration = spec.get('leaseDurationSeconds') or LEASE_DURATION
-                if time.monotonic() - self.observed[1] < duration:
+                if self.clock() - self.observed[1] < duration:
                     return False
-                print(f"Lease held by {self.holder} has expired", flush=True)
-
+                log.warning(f"Lease held by {self.holder} has expired")
             now = _now()
             if self.holder != self.identity:
                 spec['acquireTime'] = now
@@ -81,11 +86,12 @@ class LeaderElector:
             status, updated = await self.kube.request('PUT', self.path, lease)
             if status == 200:
                 self.holder = self.identity
-                self.observed = (updated['metadata']['resourceVersion'], time.monotonic())
+                self.observed = (updated['metadata']['resourceVersion'], self.clock())
                 return True
             return False
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
-            print(f"Lease request failed: {e!r}", flush=True)
+            metrics.LEASE_ERRORS.inc()
+            log.warning(f"Lease request failed: {e!r}")
             return False
 
     async def acquire(self):
@@ -95,16 +101,16 @@ class LeaderElector:
 
     async def hold(self):
         """Keep renewing the lease. Returns once leadership is lost."""
-        last_renewed = time.monotonic()
+        last_renewed = self.clock()
         while True:
             await asyncio.sleep(RETRY_PERIOD)
             if await self.try_acquire():
-                last_renewed = time.monotonic()
+                last_renewed = self.clock()
             elif self.holder and self.holder != self.identity:
-                print(f"Lost the lease to {self.holder}", flush=True)
+                log.warning(f"Lost the lease to {self.holder}")
                 return
-            elif time.monotonic() - last_renewed > RENEW_DEADLINE:
-                print("Could not renew the lease in time", flush=True)
+            elif self.clock() - last_renewed > RENEW_DEADLINE:
+                log.warning("Could not renew the lease in time")
                 return
 
     async def release(self):
@@ -115,6 +121,6 @@ class LeaderElector:
                 return
             lease['spec'].update(holderIdentity='', leaseDurationSeconds=1, renewTime=_now())
             await self.kube.request('PUT', self.path, lease)
-            print("Released the lease", flush=True)
+            log.info("Released the lease")
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
-            print(f"Lease release failed: {e!r}", flush=True)
+            log.warning(f"Lease release failed: {e!r}")

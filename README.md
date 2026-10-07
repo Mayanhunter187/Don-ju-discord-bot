@@ -22,15 +22,22 @@ Songs longer than 10 minutes are refused.
 
 The bot runs on the homelab k3s cluster, in the `don-ju` namespace.
 
-1. A push to `main` that touches code builds an image with GitHub Actions and
-   pushes it to `ghcr.io/mayanhunter187/don-ju-discord-bot` with the tag
-   `<date>-<short sha>`.
-2. Update the image tag in `deploy/k8s/base/statefulset.yaml` and push.
-3. Argo CD keeps `deploy/k8s/base` applied to the cluster.
+1. A push to `main` that touches code runs ruff and the tests, builds an
+   image, smoke-tests it, and pushes it to
+   `ghcr.io/mayanhunter187/don-ju-discord-bot` with the tag `<date>-<short sha>`.
+2. The workflow then commits that tag to `deploy/k8s/base/statefulset.yaml`.
+3. Argo CD keeps `deploy/k8s/base` applied to the cluster and rolls out the
+   new image.
+
+Pull requests run the lint and tests only. Dependabot opens PRs every week for
+Python packages (yt-dlp separately, since it has to keep up with YouTube) and
+for the base images.
 
 The Argo CD Application and both Secrets are created by the
-[homelab](https://github.com/Mayanhunter187/homelab) Ansible roles. The Secret
-values come from AWS SSM Parameter Store:
+[homelab](https://github.com/Mayanhunter187/homelab) Ansible roles. External
+Secrets keeps the Secrets in sync with AWS SSM Parameter Store every hour, and
+the bot reads the cookie file fresh for every yt-dlp call, so updated cookies
+take effect without a restart:
 
 | Secret | Key | Parameter |
 |---|---|---|
@@ -56,6 +63,13 @@ least recently played songs are evicted once a cache passes `CACHE_MAX_BYTES`
 The bot is in too few servers to need sharding; Discord requires it only from
 2,500 guilds, and a guild is always served by a single shard either way.
 
+### Metrics
+
+Each replica serves Prometheus metrics on port 8000 at `/metrics` (leader
+status, songs played, yt-dlp calls and timings, queue length, cache size,
+command counts). The cluster's Prometheus scrapes them through the PodMonitor in
+`deploy/k8s/base`, and the "Don'Ju" Grafana dashboard ships alongside it.
+
 To see which replica is leading:
 
 ```bash
@@ -75,7 +89,15 @@ COOKIES_FILE_PATH=./cookies.txt python main.py
 ```
 
 Outside Kubernetes the bot skips leader election and saves the queue to
-`songs/state.json`.
+`songs/state.json`. `LOG_LEVEL=DEBUG` turns on verbose logging.
+
+To run the lint and tests:
+
+```bash
+pip install -r requirements-dev.txt
+ruff check .
+pytest
+```
 
 `cookies.txt` is a Netscape-format cookie export from a logged-in YouTube
 session.

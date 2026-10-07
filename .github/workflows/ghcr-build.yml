@@ -4,18 +4,46 @@ on:
   push:
     branches: [main]
     paths-ignore: ['deploy/**', '**.md']
+  pull_request:
   workflow_dispatch:
+
+# A newer push to the same branch cancels the older run, so an older image
+# can never be deployed over a newer one
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
-  packages: write
 
 env:
   IMAGE: ghcr.io/mayanhunter187/don-ju-discord-bot
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - run: pytest
+
+  build:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -41,4 +69,42 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
 
+      # Same conditions as the cluster: read-only root filesystem, writable /tmp
+      - name: Smoke-test the image
+        run: |
+          docker run --rm --read-only --tmpfs /tmp "$IMAGE:${{ steps.meta.outputs.tag }}" python -c "
+          import os, shutil
+          import main, cogs.music, cogs.help, yt_dlp_ejs
+          assert os.getuid() != 0, 'container runs as root'
+          for tool in ('ffmpeg', 'node'):
+              assert shutil.which(tool), f'{tool} missing'
+          print('image ok')
+          "
+
       - run: echo "Pushed \`${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # Point the StatefulSet at the new image; Argo CD rolls it out
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Commit the new image tag
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          sed -i -E "s#(image: ${IMAGE}):.*#\1:${TAG}#" deploy/k8s/base/statefulset.yaml
+          if git diff --quiet; then echo "Already deployed"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Deploy ${TAG}"
+          for attempt in 1 2 3; do
+            git push && exit 0
+            git pull --rebase
+          done
+          exit 1

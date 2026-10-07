@@ -2,13 +2,15 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import asyncio
+import logging
+import math
 import os
 import signal
 import socket
 from dotenv import load_dotenv
-import shutil
-import subprocess
+from prometheus_client import start_http_server
 
+import metrics
 from kube import KubeClient
 from leader import LeaderElector
 from state import StateStore
@@ -18,54 +20,54 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 LEASE_NAME = os.getenv('LEASE_NAME', 'don-ju-leader')
 STATE_CONFIGMAP = os.getenv('STATE_CONFIGMAP', 'don-ju-state')
+METRICS_PORT = int(os.getenv('METRICS_PORT', 8000))
 # Touched every few seconds; the pod's probes restart it if this goes stale
 HEARTBEAT_FILE = '/tmp/heartbeat'
 
-# Debug: Check environment and node availability
-os.environ['PATH'] = os.environ.get('PATH', '') + ':/usr/bin:/usr/local/bin'
-print(f"DEBUG: PATH={os.environ.get('PATH')}", flush=True)
-print(f"DEBUG: node path={shutil.which('node')}", flush=True)
-try:
-    node_version = subprocess.check_output(['node', '-v'], stderr=subprocess.STDOUT).decode().strip()
-    print(f"DEBUG: node version={node_version}", flush=True)
-except Exception as e:
-    print(f"DEBUG: node execution failed: {e}", flush=True)
+logging.basicConfig(
+    level=os.getenv('LOG_LEVEL', 'INFO').upper(),
+    format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+)
+log = logging.getLogger('don-ju')
 
 class MusicBot(commands.Bot):
     def __init__(self, state_store):
-        intents = discord.Intents.default()
-        intents.message_content = True
-        super().__init__(command_prefix='!', intents=intents)
+        # Slash commands only, so no message content intent and no text prefix
+        super().__init__(command_prefix=commands.when_mentioned, intents=discord.Intents.default())
         self.state_store = state_store
 
     async def setup_hook(self):
         # Load extensions
-        print(f"Current working directory: {os.getcwd()}", flush=True)
         if os.path.exists('./cogs'):
-            print(f"Contents of ./cogs: {os.listdir('./cogs')}", flush=True)
             for filename in os.listdir('./cogs'):
                 if filename.endswith('.py'):
                     try:
                         await self.load_extension(f'cogs.{filename[:-3]}')
-                        print(f'Loaded extension: cogs.{filename[:-3]}', flush=True)
+                        log.info(f'Loaded extension: cogs.{filename[:-3]}')
                     except Exception as e:
-                        print(f'Failed to load extension cogs.{filename[:-3]}: {e}', flush=True)
+                        log.error(f'Failed to load extension cogs.{filename[:-3]}: {e}')
         else:
-            print("Error: ./cogs directory not found!", flush=True)
-
+            log.error("Error: ./cogs directory not found!")
         # Sync commands globally ONLY
         try:
             synced = await self.tree.sync()
-            print(f"Synced {len(synced)} command(s) globally", flush=True)
+            log.info(f"Synced {len(synced)} command(s) globally")
         except Exception as e:
-            print(f"Failed to sync commands: {e}", flush=True)
-
+            log.error(f"Failed to sync commands: {e}")
     async def on_ready(self):
-        print(f'Logged in as {self.user} (ID: {self.user.id})', flush=True)
-        print('------', flush=True)
+        log.info(f'Logged in as {self.user} (ID: {self.user.id})')
+
+    async def on_app_command_completion(self, interaction, command):
+        metrics.COMMANDS.labels(command.qualified_name).inc()
 
 kube = KubeClient.from_cluster()
 bot = MusicBot(StateStore(kube, STATE_CONFIGMAP))
+
+@bot.tree.error
+async def on_app_command_error(interaction, error):
+    name = interaction.command.qualified_name if interaction.command else 'unknown'
+    metrics.COMMAND_ERRORS.labels(name).inc()
+    log.error(f"/{name} failed", exc_info=error)
 
 @bot.tree.command(name="sync", description="Clear and resync commands (Admin only)")
 @app_commands.default_permissions(administrator=True)
@@ -97,12 +99,14 @@ async def main():
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
     heartbeat_task = asyncio.create_task(heartbeat())
+    start_http_server(METRICS_PORT)
+    metrics.DISCORD_LATENCY.set_function(lambda: bot.latency if math.isfinite(bot.latency) else 0)
 
     elector = None
     try:
         if kube:
             elector = LeaderElector(kube, LEASE_NAME, socket.gethostname())
-            print(f"Standby: waiting for lease {LEASE_NAME}", flush=True)
+            log.info(f"Standby: waiting for lease {LEASE_NAME}")
             acquire = asyncio.create_task(elector.acquire())
             stopped = asyncio.create_task(stop.wait())
             await asyncio.wait({acquire, stopped}, return_when=asyncio.FIRST_COMPLETED)
@@ -110,8 +114,8 @@ async def main():
                 acquire.cancel()
                 return
             stopped.cancel()
-            print("Became leader, connecting to Discord", flush=True)
-
+            log.info("Became leader, connecting to Discord")
+        metrics.LEADER.set(1)
         async with bot:
             running = {asyncio.create_task(bot.start(TOKEN)), asyncio.create_task(stop.wait())}
             if elector:
@@ -129,6 +133,7 @@ async def main():
                 if not task.cancelled() and task.exception():
                     raise task.exception()
     finally:
+        metrics.LEADER.set(0)
         if elector:
             await elector.release()
         if kube:
@@ -137,6 +142,6 @@ async def main():
 
 if __name__ == "__main__":
     if not TOKEN:
-        print("Error: DISCORD_TOKEN not found in .env file.", flush=True)
+        log.error("Error: DISCORD_TOKEN not found in .env file.")
     else:
         asyncio.run(main())

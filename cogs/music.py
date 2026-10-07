@@ -2,12 +2,20 @@ import discord
 from discord import app_commands, ui
 from discord.ext import commands
 import asyncio
+import contextlib
+import logging
+import shutil
+import tempfile
 import yt_dlp
 import os
 import json
 import re
 import random
 import time
+
+import metrics
+
+log = logging.getLogger(__name__)
 
 # YouTube DL options
 ytdl_format_options = {
@@ -17,25 +25,27 @@ ytdl_format_options = {
     'updatetime': False,  # mtime = download time, which cache eviction relies on
     'restrictfilenames': True,
     'noplaylist': True,
-    'nocheckcertificate': True,
     'ignoreerrors': False,
     'logtostderr': False,
-    'quiet': False,
+    'quiet': True,
     'no_warnings': False,
+    'noprogress': True,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
-    'cookiefile': os.getenv('COOKIES_FILE_PATH', '/app/cookies.txt'),
-    'verbose': False,
     'extractor_args': {
         'youtube': {
             'player_client': ['android', 'web']
         }
     },
+    # JS challenges are solved with Node.js and the yt-dlp-ejs package
     'js_runtimes': {
         'node': {}
     },
-    'remote_components': ['ejs:github']
 }
+
+# A Netscape cookie file from a logged-in YouTube session. In the cluster it
+# is a read-only Secret mount that External Secrets keeps up to date.
+COOKIES_FILE = os.getenv('COOKIES_FILE_PATH', '/app/cookies.txt')
 
 ffmpeg_options_stream = {
     'options': '-vn',
@@ -67,18 +77,88 @@ STATE_SONG_KEYS = ('id', 'ext', 'title', 'webpage_url', 'duration', 'thumbnail',
 def trim_song(song):
     return {k: song[k] for k in STATE_SONG_KEYS if k in song}
 
+def cache_stats():
+    """Return (total bytes, number of songs) in the cache."""
+    total = songs = 0
+    if os.path.isdir('songs'):
+        for entry in os.scandir('songs'):
+            if entry.is_file():
+                total += entry.stat().st_size
+                if not entry.name.endswith(('.json',) + CACHE_TEMP_SUFFIXES):
+                    songs += 1
+    return total, songs
+
+@contextlib.contextmanager
+def _ytdl():
+    """A YoutubeDL with its own copy of the cookie file.
+
+    yt-dlp writes cookies back when it closes, which a read-only mount can't
+    take, and a fresh copy per call picks up refreshed cookies without a restart.
+    """
+    opts = dict(ytdl_format_options)
+    cookies = None
+    if os.path.exists(COOKIES_FILE):
+        fd, cookies = tempfile.mkstemp(suffix='.txt')
+        os.close(fd)
+        shutil.copyfile(COOKIES_FILE, cookies)
+        opts['cookiefile'] = cookies
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            yield ydl
+    finally:
+        if cookies:
+            os.unlink(cookies)
+
 def _run_ytdl(url, kwargs):
-    with yt_dlp.YoutubeDL(ytdl_format_options) as ydl:
+    with _ytdl() as ydl:
         data = ydl.extract_info(url, **kwargs)
         # Search results can be a lazy generator; resolve it while ydl is open
         if data and 'entries' in data:
             data['entries'] = list(data['entries'])
         return data
 
-async def extract_info(url, **kwargs):
-    """Run yt-dlp off the event loop, at most ytdl_slots at a time."""
+def _download_from_info(info):
+    with _ytdl() as ydl:
+        ydl.process_ie_result(info, download=True)
+
+async def _in_slot(kind, func, *args):
+    """Run a yt-dlp call off the event loop, at most ytdl_slots at a time."""
     async with ytdl_slots:
-        return await asyncio.get_running_loop().run_in_executor(None, _run_ytdl, url, kwargs)
+        start = time.monotonic()
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(None, func, *args)
+        except Exception:
+            metrics.YTDL_CALLS.labels(kind, 'error').inc()
+            raise
+        finally:
+            metrics.YTDL_SECONDS.labels(kind).observe(time.monotonic() - start)
+        metrics.YTDL_CALLS.labels(kind, 'ok').inc()
+        return result
+
+async def extract_info(url, **kwargs):
+    if kwargs.get('process') is False:
+        kind = 'search'
+    elif kwargs.get('download', True):
+        kind = 'extract_download'
+    else:
+        kind = 'extract'
+    return await _in_slot(kind, _run_ytdl, url, kwargs)
+
+async def download(info):
+    """Download a song into the cache.
+
+    Reuses the stream URLs resolved when the song was queued, which skips a
+    second page fetch and JS challenge. They expire after a few hours, and a
+    queue restored after a restart doesn't keep them, so fall back to a fresh
+    extraction when they can't be used.
+    """
+    if info.get('formats'):
+        try:
+            await _in_slot('download', _download_from_info, dict(info))
+            return
+        except Exception as e:
+            log.info("Download from queued info failed (%s), extracting again", e)
+    await extract_info(info['webpage_url'], download=True)
 
 class YTDLSource(discord.PCMVolumeTransformer):
     def __init__(self, source, *, data, volume=0.5, is_cached=False):
@@ -128,8 +208,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
             else:
                 before_opts = f"-ss {int(seek_offset)}"
             options['before_options'] = before_opts
-            print(f"DEBUG: Applied seek offset {int(seek_offset)} seconds to FFmpeg options", flush=True)
-        
+            log.debug(f"Applied seek offset {int(seek_offset)} seconds to FFmpeg options")
         return cls(discord.FFmpegPCMAudio(filename, **options), data=data, is_cached=is_cached)
 
 class MusicPlayer:
@@ -174,7 +253,7 @@ class MusicPlayer:
                         self.bot.get_cog("Music").cleanup_cache()
 
                         # Download
-                        await extract_info(source['webpage_url'], download=True)
+                        await download(source)
                     else:
                         # Mark as recently played so cache eviction keeps it
                         os.utime(filename)
@@ -183,40 +262,39 @@ class MusicPlayer:
                     source = YTDLSource.create_from_data(source, stream=False, is_cached=is_cached, seek_offset=self.seek_position)
                     # Reset seek position after applying
                     if self.seek_position > 0:
-                        print(f"DEBUG: Resumed from {self.seek_position} seconds", flush=True)
+                        log.debug(f"Resumed from {self.seek_position} seconds")
                         self.seek_position = 0
                 except ValueError as e:
                     await self.channel.send(f"{e}")
                     continue
                 except Exception as e:
-                    print(f"Error converting data: {e}", flush=True)
+                    log.warning(f"Error converting data: {e}")
                     await self.channel.send(f'Error creating audio source: {e}')
                     continue
             
             # Now we have a YTDLSource object
             self.current = source
 
-            print(f"DEBUG: source type: {type(source)}", flush=True)
+            log.debug(f"source type: {type(source)}")
             if hasattr(source, 'title'):
-                print(f"DEBUG: source.title: {source.title}", flush=True)
-
+                log.debug(f"source.title: {source.title}")
             # YTDLSource is already a PCMVolumeTransformer, we can use it directly
             # But we need to apply volume
             source.volume = self.volume
 
             try:
-                print(f"DEBUG: Playing {source.title}", flush=True)
-                
+                log.debug(f"Playing {source.title}")
                 def after_callback(error):
                     if error:
-                        print(f"DEBUG: Player error: {error}", flush=True)
-                    print("DEBUG: Song finished/stopped, triggering next...", flush=True)
+                        log.debug(f"Player error: {error}")
+                    log.debug("Song finished/stopped, triggering next...")
                     self.bot.loop.call_soon_threadsafe(self.next.set)
 
                 # Track when playback starts
                 self.playback_start_time = time.time()
                 
                 self.guild.voice_client.play(source, after=after_callback)
+                metrics.SONGS_PLAYED.labels('cache' if source.is_cached else 'download').inc()
                 
                 # Set bot status to "Listening to [Song Name]"
                 await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=source.title))
@@ -270,21 +348,19 @@ class MusicPlayer:
                     self.save_task.cancel()
                 self.save_task = self.bot.loop.create_task(periodic_save())
             except Exception as e:
-                print(f"DEBUG: Exception in play: {e}", flush=True)
+                log.debug(f"Exception in play: {e}")
                 await self.channel.send(f"Error starting playback: {e}")
                 self.next.set() # Ensure we don't get stuck
 
             await self.next.wait()
-            print("DEBUG: Wait finished, cleaning up...", flush=True)
-
+            log.debug("Wait finished, cleaning up...")
             # Make sure the FFmpeg process is cleaned up.
             try:
                 source.cleanup()
             except ValueError:
-                print("DEBUG: Source already cleaned up (ValueError ignored)", flush=True)
+                log.debug("Source already cleaned up (ValueError ignored)")
             except Exception as e:
-                print(f"DEBUG: Error cleaning up source: {e}", flush=True)
-            
+                log.debug(f"Error cleaning up source: {e}")
             self.current = None
             # Reset status to default when song ends
             await self.bot.get_cog("Music").set_default_status()
@@ -346,7 +422,7 @@ class SearchView(ui.View):
         except discord.NotFound:
             # Message already deleted, that's fine
             pass
-        except Exception as e:
+        except Exception:
             # Fallback: just edit the message
             try:
                 cancel_embed = discord.Embed(
@@ -355,7 +431,7 @@ class SearchView(ui.View):
                     color=discord.Color.red()
                 )
                 await interaction.response.send_message(embed=cancel_embed, ephemeral=True)
-            except:
+            except Exception:
                 pass
 
 class Music(commands.Cog):
@@ -367,6 +443,10 @@ class Music(commands.Cog):
         self.store_task = None
         self.frozen = False  # set on shutdown so the final saved state isn't overwritten
         self.cleanup_partial_files()
+        metrics.QUEUE_LENGTH.set_function(lambda: sum(p.queue.qsize() for p in list(self.players.values())))
+        metrics.VOICE_CONNECTIONS.set_function(lambda: len(self.bot.voice_clients))
+        metrics.CACHE_BYTES.set_function(lambda: cache_stats()[0])
+        metrics.CACHE_SONGS.set_function(lambda: cache_stats()[1])
 
     async def cog_load(self):
         if self.store.kube:
@@ -420,8 +500,8 @@ class Music(commands.Cog):
                     os.remove(victim)
                 except FileNotFoundError:
                     pass
-            print(f"Evicted {video_id} from cache", flush=True)
-
+            log.info(f"Evicted {video_id} from cache")
+            metrics.CACHE_EVICTIONS.inc()
     def cleanup_partial_files(self):
         """Clean up .part, .ytdl, and .temp files on startup."""
         if not os.path.exists('songs'):
@@ -432,8 +512,7 @@ class Music(commands.Cog):
                 try:
                     os.remove(os.path.join('songs', filename))
                 except Exception as e:
-                    print(f"Failed to delete {filename}: {e}")
-
+                    log.warning(f"Failed to delete {filename}: {e}")
     def save_state(self):
         """Saves the current queue and playback state."""
         if self.frozen:
@@ -471,7 +550,7 @@ class Music(commands.Cog):
     async def load_state(self):
         """Loads the saved queue on startup."""
         await self.bot.wait_until_ready()
-        print("DEBUG: Loading state...", flush=True)
+        log.debug("Loading state...")
         try:
             state = await self.store.load()
 
@@ -489,9 +568,9 @@ class Music(commands.Cog):
                     if not guild.voice_client or not guild.voice_client.is_connected():
                         try:
                             await voice_channel.connect()
-                            print(f"DEBUG: Reconnected to voice channel {voice_channel.name}", flush=True)
+                            log.debug(f"Reconnected to voice channel {voice_channel.name}")
                         except Exception as e:
-                            print(f"Failed to reconnect voice: {e}", flush=True)
+                            log.warning(f"Failed to reconnect voice: {e}")
                             continue
                     
                     # Get player
@@ -507,7 +586,7 @@ class Music(commands.Cog):
                     
                     # Only send resume notification if we actually have songs to resume
                     if not data['queue']:
-                        print(f"DEBUG: Queue was empty, skipping resume notification", flush=True)
+                        log.debug("Queue was empty, skipping resume notification")
                         continue
                     
                     # Check if first song has a resume position marker
@@ -515,8 +594,7 @@ class Music(commands.Cog):
                         resume_pos = data['queue'][0]['_resume_position']
                         if resume_pos > 0:
                             player.seek_position = resume_pos
-                            print(f"DEBUG: Will resume from {resume_pos} seconds", flush=True)
-                    
+                            log.debug(f"Will resume from {resume_pos} seconds")
                     # Set flag to indicate this is a resumed session
                     player._resumed_from_state = True
                     
@@ -555,11 +633,9 @@ class Music(commands.Cog):
                     resume_embed.set_footer(text="▶️ Starting playback now")
                     await text_channel.send(embed=resume_embed)
                     
-                    print(f"DEBUG: Restored queue for guild {guild.name}", flush=True)
-                        
+                    log.debug(f"Restored queue for guild {guild.name}")
         except Exception as e:
-            print(f"Error loading state: {e}", flush=True)
-
+            log.warning(f"Error loading state: {e}")
     async def cleanup(self, guild):
         try:
             await guild.voice_client.disconnect()
@@ -635,8 +711,7 @@ class Music(commands.Cog):
                         cached_data = json.load(f)
                     is_cache_hit = True
                 except Exception as e:
-                    print(f"Failed to load cache for {video_id}: {e}")
-
+                    log.warning(f"Failed to load cache for {video_id}: {e}")
         # Determine initial message content
         initial_msg = ""
         if is_cache_hit and cached_data:
@@ -694,14 +769,13 @@ class Music(commands.Cog):
                 # Download in background without blocking
                 async def background_download():
                     try:
-                        print(f"DEBUG: Starting background download for {data.get('title', 'Unknown')}", flush=True)
+                        log.debug(f"Starting background download for {data.get('title', 'Unknown')}")
                         # This will download and cache the file
                         self.cleanup_cache()
-                        await extract_info(data['webpage_url'], download=True)
-                        print(f"DEBUG: Background download complete for {data.get('title', 'Unknown')}", flush=True)
+                        await download(data)
+                        log.debug(f"Background download complete for {data.get('title', 'Unknown')}")
                     except Exception as e:
-                        print(f"DEBUG: Background download failed: {e}", flush=True)
-                
+                        log.debug(f"Background download failed: {e}")
                 # Start download task without awaiting (fire and forget)
                 self.bot.loop.create_task(background_download())
             
@@ -730,7 +804,7 @@ class Music(commands.Cog):
             # Close Ephemeral Interaction (Delete it so it vanishes)
             try:
                 await interaction.delete_original_response()
-            except:
+            except Exception:
                 # Fallback if delete fails (e.g. too old), just edit to empty
                 await interaction.edit_original_response(content="✅ Queued", embed=None, view=None)
             
@@ -767,7 +841,7 @@ class Music(commands.Cog):
                             with open(info_path, 'r') as f:
                                 info = json.load(f)
                                 cached_songs.append(info['webpage_url'])
-                        except:
+                        except Exception:
                             pass
             
             if not cached_songs:
@@ -791,7 +865,8 @@ class Music(commands.Cog):
             else:
                 raise
         
-        player = self.get_player(interaction)
+        # Creates the guild's player, bound to this text channel
+        self.get_player(interaction)
 
         if interaction.guild.voice_client is None:
             if interaction.user.voice:
@@ -892,7 +967,7 @@ class Music(commands.Cog):
         except Exception as e:
             error_embed = discord.Embed(
                 title="⚠️ Search Error",
-                description=f"Something went wrong while searching.\n\n💡 Try again in a moment!",
+                description="Something went wrong while searching.\n\n💡 Try again in a moment!",
                 color=discord.Color.orange()
             )
             error_embed.add_field(name="🔍 Error Details", value=f"```{str(e)[:200]}```", inline=False)
@@ -900,7 +975,7 @@ class Music(commands.Cog):
     @app_commands.command(name="skip", description="Skips the song")
     async def skip(self, interaction: discord.Interaction):
         """Skip the song."""
-        print(f"DEBUG: Skip requested by {interaction.user}", flush=True)
+        log.debug(f"Skip requested by {interaction.user}")
         vc = interaction.guild.voice_client
         if not vc or not vc.is_connected():
             return await interaction.response.send_message('❌ I\'m not currently playing anything!', ephemeral=True)
@@ -908,7 +983,7 @@ class Music(commands.Cog):
         if vc.is_paused():
             pass
         elif not vc.is_playing():
-            print("DEBUG: Skip called but not playing", flush=True)
+            log.debug("Skip called but not playing")
             return await interaction.response.send_message('❌ Nothing is playing right now!', ephemeral=True)
 
         # Get player and current song info
@@ -934,7 +1009,7 @@ class Music(commands.Cog):
             song_thumbnail = None
             song_duration = None
 
-        print("DEBUG: Calling vc.stop()", flush=True)
+        log.debug("Calling vc.stop()")
         vc.stop()
         self.save_state()
         
@@ -978,7 +1053,7 @@ class Music(commands.Cog):
         while not player.queue.empty():
             try:
                 player.queue.get_nowait()
-            except:
+            except Exception:
                 break
         
         vc.stop()
@@ -1148,7 +1223,7 @@ class Music(commands.Cog):
                             with open(info_path, 'r') as f:
                                 info = json.load(f)
                                 friendly_name = info.get('title', filename)
-                        except:
+                        except Exception:
                             pass  # Use filename if JSON reading fails
                     
                     audio_files.append((friendly_name, file_size, video_id))
@@ -1185,7 +1260,7 @@ class Music(commands.Cog):
                                 mins = int(duration // 60)
                                 secs = int(duration % 60)
                                 duration_str = f"{mins}:{secs:02d}"
-                    except:
+                    except Exception:
                         pass
                 
                 # Truncate long titles
