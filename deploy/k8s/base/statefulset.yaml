@@ -24,6 +24,13 @@ spec:
     spec:
       serviceAccountName: discord-music-bot
       terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -35,6 +42,14 @@ spec:
         - name: discord-music-bot
           image: ghcr.io/mayanhunter187/don-ju-discord-bot:20261007-d8895be
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: metrics
+              containerPort: 8000
           env:
             - name: DISCORD_TOKEN
               valueFrom:
@@ -53,6 +68,10 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 20
           volumeMounts:
+            # Scratch space (HOME, yt-dlp's cache, cookie copies, heartbeat);
+            # the rest of the root filesystem is read-only
+            - name: tmp
+              mountPath: /tmp
             - name: cookies
               mountPath: /tmp/cookies-ro
               readOnly: true
@@ -61,12 +80,16 @@ spec:
           resources:
             requests:
               memory: 256Mi
-              cpu: 250m
+              cpu: 100m
+            # No CPU limit: throttling slowed the Node.js JS-challenge solver,
+            # which runs in short bursts
             limits:
               # Python plus up to two yt-dlp Node.js solvers (see ytdl_slots)
               memory: 1Gi
-              cpu: 500m
       volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 512Mi
         - name: cookies
           secret:
             secretName: youtube-cookies

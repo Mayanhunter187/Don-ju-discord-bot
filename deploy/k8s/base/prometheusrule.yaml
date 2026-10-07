@@ -1,0 +1,43 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: discord-music-bot
+  namespace: don-ju
+spec:
+  groups:
+    - name: don-ju
+      rules:
+        - alert: DonJuNoLeader
+          expr: (sum(donju_leader{namespace="don-ju"}) or vector(0)) < 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: No Don'Ju replica is connected to Discord
+            description: >-
+              Neither replica has held the don-ju-leader lease for 2 minutes. Check
+              the pods in the don-ju namespace and their logs.
+        - alert: DonJuYoutubeFailing
+          expr: |
+            sum(rate(donju_ytdl_calls_total{namespace="don-ju",result="error"}[15m]))
+              / sum(rate(donju_ytdl_calls_total{namespace="don-ju"}[15m])) > 0.5
+            and sum(increase(donju_ytdl_calls_total{namespace="don-ju"}[15m])) >= 4
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Most yt-dlp calls are failing
+            description: >-
+              Over half of the bot's YouTube lookups and downloads have failed for 15
+              minutes. The cookies in /homelab/don-ju/youtube-cookies may have
+              expired, or yt-dlp needs an update.
+        - alert: DonJuStateNotSaving
+          expr: sum(increase(donju_state_save_errors_total{namespace="don-ju"}[15m])) > 5
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: The bot can't save its queue
+            description: >-
+              Writes to the don-ju-state ConfigMap keep failing, so a handover would
+              lose the queue.

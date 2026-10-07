@@ -1,0 +1,13 @@
+# Has the cluster's Prometheus scrape both replicas' /metrics
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: discord-music-bot
+  namespace: don-ju
+spec:
+  selector:
+    matchLabels:
+      app: discord-music-bot
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 30s

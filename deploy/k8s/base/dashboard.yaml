@@ -1,0 +1,93 @@
+# Grafana loads ConfigMaps labelled grafana_dashboard=1 from any namespace
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: don-ju-dashboard
+  namespace: don-ju
+  labels:
+    grafana_dashboard: '1'
+data:
+  don-ju.json: "{\n  \"uid\": \"don-ju\",\n  \"title\": \"Don'Ju\",\n  \"tags\": [\n    \"don-ju\",\n    \"discord\"\n  ],\n  \"timezone\": \"browser\",\n  \"schemaVersion\": 39,\n  \"refresh\": \"30s\"\
+    ,\n  \"time\": {\n    \"from\": \"now-24h\",\n    \"to\": \"now\"\n  },\n  \"templating\": {\n    \"list\": [\n      {\n        \"name\": \"datasource\",\n        \"label\": \"Data source\",\n     \
+    \   \"type\": \"datasource\",\n        \"query\": \"prometheus\",\n        \"current\": {},\n        \"hide\": 0\n      }\n    ]\n  },\n  \"panels\": [\n    {\n      \"type\": \"stat\",\n      \"title\"\
+    : \"Leader\",\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\": \"${datasource}\"\n      },\n      \"gridPos\": {\n        \"x\": 0,\n        \"y\": 0,\n        \"w\": 6,\n\
+    \        \"h\": 5\n      },\n      \"targets\": [\n        {\n          \"refId\": \"A\",\n          \"expr\": \"max by (pod) (donju_leader{namespace=\\\"don-ju\\\"})\",\n          \"legendFormat\"\
+    : \"{{pod}}\",\n          \"datasource\": {\n            \"type\": \"prometheus\",\n            \"uid\": \"${datasource}\"\n          }\n        }\n      ],\n      \"fieldConfig\": {\n        \"defaults\"\
+    : {\n          \"mappings\": [\n            {\n              \"type\": \"value\",\n              \"options\": {\n                \"0\": {\n                  \"text\": \"standby\",\n                \
+    \  \"color\": \"blue\"\n                },\n                \"1\": {\n                  \"text\": \"leader\",\n                  \"color\": \"green\"\n                }\n              }\n          \
+    \  }\n          ],\n          \"thresholds\": {\n            \"mode\": \"absolute\",\n            \"steps\": [\n              {\n                \"color\": \"blue\",\n                \"value\": null\n\
+    \              },\n              {\n                \"color\": \"green\",\n                \"value\": 1\n              }\n            ]\n          }\n        },\n        \"overrides\": []\n      },\n\
+    \      \"options\": {\n        \"colorMode\": \"background\",\n        \"graphMode\": \"none\",\n        \"textMode\": \"value_and_name\",\n        \"reduceOptions\": {\n          \"calcs\": [\n   \
+    \         \"lastNotNull\"\n          ]\n        }\n      }\n    },\n    {\n      \"type\": \"stat\",\n      \"title\": \"Voice connections\",\n      \"datasource\": {\n        \"type\": \"prometheus\"\
+    ,\n        \"uid\": \"${datasource}\"\n      },\n      \"gridPos\": {\n        \"x\": 6,\n        \"y\": 0,\n        \"w\": 4,\n        \"h\": 5\n      },\n      \"targets\": [\n        {\n        \
+    \  \"refId\": \"A\",\n          \"expr\": \"sum(donju_voice_connections{namespace=\\\"don-ju\\\"})\",\n          \"legendFormat\": \"voice\",\n          \"datasource\": {\n            \"type\": \"prometheus\"\
+    ,\n            \"uid\": \"${datasource}\"\n          }\n        }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {},\n        \"overrides\": []\n      },\n      \"options\": {\n        \"\
+    graphMode\": \"area\",\n        \"reduceOptions\": {\n          \"calcs\": [\n            \"lastNotNull\"\n          ]\n        }\n      }\n    },\n    {\n      \"type\": \"stat\",\n      \"title\"\
+    : \"Queued songs\",\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\": \"${datasource}\"\n      },\n      \"gridPos\": {\n        \"x\": 10,\n        \"y\": 0,\n        \"\
+    w\": 4,\n        \"h\": 5\n      },\n      \"targets\": [\n        {\n          \"refId\": \"A\",\n          \"expr\": \"sum(donju_queue_length{namespace=\\\"don-ju\\\"})\",\n          \"legendFormat\"\
+    : \"queued\",\n          \"datasource\": {\n            \"type\": \"prometheus\",\n            \"uid\": \"${datasource}\"\n          }\n        }\n      ],\n      \"fieldConfig\": {\n        \"defaults\"\
+    : {},\n        \"overrides\": []\n      },\n      \"options\": {\n        \"graphMode\": \"area\",\n        \"reduceOptions\": {\n          \"calcs\": [\n            \"lastNotNull\"\n          ]\n \
+    \       }\n      }\n    },\n    {\n      \"type\": \"stat\",\n      \"title\": \"Discord latency\",\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\": \"${datasource}\"\n\
+    \      },\n      \"gridPos\": {\n        \"x\": 14,\n        \"y\": 0,\n        \"w\": 5,\n        \"h\": 5\n      },\n      \"targets\": [\n        {\n          \"refId\": \"A\",\n          \"expr\"\
+    : \"max(donju_discord_latency_seconds{namespace=\\\"don-ju\\\"} > 0)\",\n          \"legendFormat\": \"latency\",\n          \"datasource\": {\n            \"type\": \"prometheus\",\n            \"\
+    uid\": \"${datasource}\"\n          }\n        }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\": \"s\"\n        },\n        \"overrides\": []\n      },\n      \"options\"\
+    : {\n        \"graphMode\": \"area\",\n        \"reduceOptions\": {\n          \"calcs\": [\n            \"lastNotNull\"\n          ]\n        }\n      }\n    },\n    {\n      \"type\": \"stat\",\n\
+    \      \"title\": \"Restarts (24h)\",\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\": \"${datasource}\"\n      },\n      \"gridPos\": {\n        \"x\": 19,\n        \"\
+    y\": 0,\n        \"w\": 5,\n        \"h\": 5\n      },\n      \"targets\": [\n        {\n          \"refId\": \"A\",\n          \"expr\": \"sum(increase(kube_pod_container_status_restarts_total{namespace=\\\
+    \"don-ju\\\",container=\\\"discord-music-bot\\\"}[24h]))\",\n          \"legendFormat\": \"restarts\",\n          \"datasource\": {\n            \"type\": \"prometheus\",\n            \"uid\": \"${datasource}\"\
+    \n          }\n        }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"decimals\": 0,\n          \"thresholds\": {\n            \"mode\": \"absolute\",\n            \"steps\"\
+    : [\n              {\n                \"color\": \"green\",\n                \"value\": null\n              },\n              {\n                \"color\": \"orange\",\n                \"value\": 1\n\
+    \              },\n              {\n                \"color\": \"red\",\n                \"value\": 5\n              }\n            ]\n          }\n        },\n        \"overrides\": []\n      },\n\
+    \      \"options\": {\n        \"graphMode\": \"none\",\n        \"reduceOptions\": {\n          \"calcs\": [\n            \"lastNotNull\"\n          ]\n        }\n      }\n    },\n    {\n      \"type\"\
+    : \"timeseries\",\n      \"title\": \"Songs played per hour\",\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\": \"${datasource}\"\n      },\n      \"gridPos\": {\n     \
+    \   \"x\": 0,\n        \"y\": 5,\n        \"w\": 8,\n        \"h\": 7\n      },\n      \"targets\": [\n        {\n          \"refId\": \"A\",\n          \"expr\": \"sum by (source) (increase(donju_songs_played_total{namespace=\\\
+    \"don-ju\\\"}[1h]))\",\n          \"legendFormat\": \"{{source}}\",\n          \"datasource\": {\n            \"type\": \"prometheus\",\n            \"uid\": \"${datasource}\"\n          }\n       \
+    \ }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\": \"short\"\n        },\n        \"overrides\": []\n      },\n      \"options\": {\n        \"legend\": {\n      \
+    \    \"displayMode\": \"list\",\n          \"placement\": \"bottom\",\n          \"showLegend\": true\n        },\n        \"tooltip\": {\n          \"mode\": \"multi\"\n        }\n      }\n    },\n\
+    \    {\n      \"type\": \"timeseries\",\n      \"title\": \"Commands per hour\",\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\": \"${datasource}\"\n      },\n      \"gridPos\"\
+    : {\n        \"x\": 8,\n        \"y\": 5,\n        \"w\": 8,\n        \"h\": 7\n      },\n      \"targets\": [\n        {\n          \"refId\": \"A\",\n          \"expr\": \"sum by (command) (increase(donju_commands_total{namespace=\\\
+    \"don-ju\\\"}[1h]))\",\n          \"legendFormat\": \"/{{command}}\",\n          \"datasource\": {\n            \"type\": \"prometheus\",\n            \"uid\": \"${datasource}\"\n          }\n     \
+    \   }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\": \"short\"\n        },\n        \"overrides\": []\n      },\n      \"options\": {\n        \"legend\": {\n    \
+    \      \"displayMode\": \"list\",\n          \"placement\": \"bottom\",\n          \"showLegend\": true\n        },\n        \"tooltip\": {\n          \"mode\": \"multi\"\n        }\n      }\n    },\n\
+    \    {\n      \"type\": \"timeseries\",\n      \"title\": \"Command errors\",\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\": \"${datasource}\"\n      },\n      \"gridPos\"\
+    : {\n        \"x\": 16,\n        \"y\": 5,\n        \"w\": 8,\n        \"h\": 7\n      },\n      \"targets\": [\n        {\n          \"refId\": \"A\",\n          \"expr\": \"sum by (command) (increase(donju_command_errors_total{namespace=\\\
+    \"don-ju\\\"}[1h]))\",\n          \"legendFormat\": \"/{{command}}\",\n          \"datasource\": {\n            \"type\": \"prometheus\",\n            \"uid\": \"${datasource}\"\n          }\n     \
+    \   }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\": \"short\"\n        },\n        \"overrides\": []\n      },\n      \"options\": {\n        \"legend\": {\n    \
+    \      \"displayMode\": \"list\",\n          \"placement\": \"bottom\",\n          \"showLegend\": true\n        },\n        \"tooltip\": {\n          \"mode\": \"multi\"\n        }\n      }\n    },\n\
+    \    {\n      \"type\": \"timeseries\",\n      \"title\": \"yt-dlp calls per minute\",\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\": \"${datasource}\"\n      },\n   \
+    \   \"gridPos\": {\n        \"x\": 0,\n        \"y\": 12,\n        \"w\": 8,\n        \"h\": 7\n      },\n      \"targets\": [\n        {\n          \"refId\": \"A\",\n          \"expr\": \"sum by (kind,\
+    \ result) (rate(donju_ytdl_calls_total{namespace=\\\"don-ju\\\"}[5m])) * 60\",\n          \"legendFormat\": \"{{kind}} {{result}}\",\n          \"datasource\": {\n            \"type\": \"prometheus\"\
+    ,\n            \"uid\": \"${datasource}\"\n          }\n        }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\": \"short\"\n        },\n        \"overrides\": []\n\
+    \      },\n      \"options\": {\n        \"legend\": {\n          \"displayMode\": \"list\",\n          \"placement\": \"bottom\",\n          \"showLegend\": true\n        },\n        \"tooltip\": {\n\
+    \          \"mode\": \"multi\"\n        }\n      }\n    },\n    {\n      \"type\": \"timeseries\",\n      \"title\": \"yt-dlp time (p50 / p95)\",\n      \"datasource\": {\n        \"type\": \"prometheus\"\
+    ,\n        \"uid\": \"${datasource}\"\n      },\n      \"gridPos\": {\n        \"x\": 8,\n        \"y\": 12,\n        \"w\": 8,\n        \"h\": 7\n      },\n      \"targets\": [\n        {\n       \
+    \   \"refId\": \"A\",\n          \"expr\": \"histogram_quantile(0.5, sum by (kind, le) (rate(donju_ytdl_seconds_bucket{namespace=\\\"don-ju\\\"}[15m])))\",\n          \"legendFormat\": \"p50 {{kind}}\"\
+    ,\n          \"datasource\": {\n            \"type\": \"prometheus\",\n            \"uid\": \"${datasource}\"\n          }\n        },\n        {\n          \"refId\": \"B\",\n          \"expr\": \"\
+    histogram_quantile(0.95, sum by (kind, le) (rate(donju_ytdl_seconds_bucket{namespace=\\\"don-ju\\\"}[15m])))\",\n          \"legendFormat\": \"p95 {{kind}}\",\n          \"datasource\": {\n        \
+    \    \"type\": \"prometheus\",\n            \"uid\": \"${datasource}\"\n          }\n        }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\": \"s\"\n        },\n \
+    \       \"overrides\": []\n      },\n      \"options\": {\n        \"legend\": {\n          \"displayMode\": \"list\",\n          \"placement\": \"bottom\",\n          \"showLegend\": true\n       \
+    \ },\n        \"tooltip\": {\n          \"mode\": \"multi\"\n        }\n      }\n    },\n    {\n      \"type\": \"timeseries\",\n      \"title\": \"Cache size\",\n      \"datasource\": {\n        \"\
+    type\": \"prometheus\",\n        \"uid\": \"${datasource}\"\n      },\n      \"gridPos\": {\n        \"x\": 16,\n        \"y\": 12,\n        \"w\": 8,\n        \"h\": 7\n      },\n      \"targets\"\
+    : [\n        {\n          \"refId\": \"A\",\n          \"expr\": \"donju_cache_bytes{namespace=\\\"don-ju\\\"}\",\n          \"legendFormat\": \"{{pod}}\",\n          \"datasource\": {\n           \
+    \ \"type\": \"prometheus\",\n            \"uid\": \"${datasource}\"\n          }\n        }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\": \"bytes\"\n        },\n\
+    \        \"overrides\": []\n      },\n      \"options\": {\n        \"legend\": {\n          \"displayMode\": \"list\",\n          \"placement\": \"bottom\",\n          \"showLegend\": true\n      \
+    \  },\n        \"tooltip\": {\n          \"mode\": \"multi\"\n        }\n      }\n    },\n    {\n      \"type\": \"timeseries\",\n      \"title\": \"Memory\",\n      \"datasource\": {\n        \"type\"\
+    : \"prometheus\",\n        \"uid\": \"${datasource}\"\n      },\n      \"gridPos\": {\n        \"x\": 0,\n        \"y\": 19,\n        \"w\": 8,\n        \"h\": 7\n      },\n      \"targets\": [\n  \
+    \      {\n          \"refId\": \"A\",\n          \"expr\": \"sum by (pod) (container_memory_working_set_bytes{namespace=\\\"don-ju\\\",container=\\\"discord-music-bot\\\"})\",\n          \"legendFormat\"\
+    : \"{{pod}}\",\n          \"datasource\": {\n            \"type\": \"prometheus\",\n            \"uid\": \"${datasource}\"\n          }\n        },\n        {\n          \"refId\": \"B\",\n        \
+    \  \"expr\": \"max(kube_pod_container_resource_limits{namespace=\\\"don-ju\\\",container=\\\"discord-music-bot\\\",resource=\\\"memory\\\"})\",\n          \"legendFormat\": \"limit\",\n          \"\
+    datasource\": {\n            \"type\": \"prometheus\",\n            \"uid\": \"${datasource}\"\n          }\n        }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\"\
+    : \"bytes\"\n        },\n        \"overrides\": []\n      },\n      \"options\": {\n        \"legend\": {\n          \"displayMode\": \"list\",\n          \"placement\": \"bottom\",\n          \"showLegend\"\
+    : true\n        },\n        \"tooltip\": {\n          \"mode\": \"multi\"\n        }\n      }\n    },\n    {\n      \"type\": \"timeseries\",\n      \"title\": \"CPU\",\n      \"datasource\": {\n  \
+    \      \"type\": \"prometheus\",\n        \"uid\": \"${datasource}\"\n      },\n      \"gridPos\": {\n        \"x\": 8,\n        \"y\": 19,\n        \"w\": 8,\n        \"h\": 7\n      },\n      \"targets\"\
+    : [\n        {\n          \"refId\": \"A\",\n          \"expr\": \"sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\\\"don-ju\\\",container=\\\"discord-music-bot\\\"}[5m]))\",\n     \
+    \     \"legendFormat\": \"{{pod}}\",\n          \"datasource\": {\n            \"type\": \"prometheus\",\n            \"uid\": \"${datasource}\"\n          }\n        }\n      ],\n      \"fieldConfig\"\
+    : {\n        \"defaults\": {\n          \"unit\": \"cores\"\n        },\n        \"overrides\": []\n      },\n      \"options\": {\n        \"legend\": {\n          \"displayMode\": \"list\",\n    \
+    \      \"placement\": \"bottom\",\n          \"showLegend\": true\n        },\n        \"tooltip\": {\n          \"mode\": \"multi\"\n        }\n      }\n    },\n    {\n      \"type\": \"timeseries\"\
+    ,\n      \"title\": \"Lease and state errors\",\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\": \"${datasource}\"\n      },\n      \"gridPos\": {\n        \"x\": 16,\n\
+    \        \"y\": 19,\n        \"w\": 8,\n        \"h\": 7\n      },\n      \"targets\": [\n        {\n          \"refId\": \"A\",\n          \"expr\": \"sum(increase(donju_lease_errors_total{namespace=\\\
+    \"don-ju\\\"}[15m]))\",\n          \"legendFormat\": \"lease\",\n          \"datasource\": {\n            \"type\": \"prometheus\",\n            \"uid\": \"${datasource}\"\n          }\n        },\n\
+    \        {\n          \"refId\": \"B\",\n          \"expr\": \"sum(increase(donju_state_save_errors_total{namespace=\\\"don-ju\\\"}[15m]))\",\n          \"legendFormat\": \"state save\",\n         \
+    \ \"datasource\": {\n            \"type\": \"prometheus\",\n            \"uid\": \"${datasource}\"\n          }\n        }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"\
+    unit\": \"short\"\n        },\n        \"overrides\": []\n      },\n      \"options\": {\n        \"legend\": {\n          \"displayMode\": \"list\",\n          \"placement\": \"bottom\",\n        \
+    \  \"showLegend\": true\n        },\n        \"tooltip\": {\n          \"mode\": \"multi\"\n        }\n      }\n    }\n  ]\n}"
