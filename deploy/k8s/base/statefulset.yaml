@@ -33,7 +33,7 @@ spec:
                   app: discord-music-bot
       containers:
         - name: discord-music-bot
-          image: ghcr.io/mayanhunter187/don-ju-discord-bot:20261006-6e45327
+          image: ghcr.io/mayanhunter187/don-ju-discord-bot:20261007-d8895be
           imagePullPolicy: IfNotPresent
           env:
             - name: DISCORD_TOKEN
