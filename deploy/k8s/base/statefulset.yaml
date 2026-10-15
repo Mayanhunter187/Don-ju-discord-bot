@@ -40,7 +40,7 @@ spec:
                   app: discord-music-bot
       containers:
         - name: discord-music-bot
-          image: ghcr.io/mayanhunter187/don-ju-discord-bot:20261007-d8895be
+          image: ghcr.io/mayanhunter187/don-ju-discord-bot:20261015-c67227c
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
