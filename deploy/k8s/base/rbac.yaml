@@ -3,13 +3,11 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: discord-music-bot
-  namespace: don-ju
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: discord-music-bot
-  namespace: don-ju
 rules:
   # create can't be limited by name, so it gets its own rules
   - apiGroups: ["coordination.k8s.io"]
@@ -31,7 +29,6 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: discord-music-bot
-  namespace: don-ju
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -39,4 +36,3 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: discord-music-bot
-    namespace: don-ju

@@ -7,7 +7,6 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: discord-music-bot
-  namespace: don-ju
   labels:
     app: discord-music-bot
 spec:
@@ -40,7 +39,7 @@ spec:
                   app: discord-music-bot
       containers:
         - name: discord-music-bot
-          image: ghcr.io/mayanhunter187/don-ju-discord-bot:20261015-92e4ca8
+          image: ghcr.io/mayanhunter187/don-ju-discord-bot
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

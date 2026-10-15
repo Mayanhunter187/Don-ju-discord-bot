@@ -3,7 +3,6 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: discord-music-bot
-  namespace: don-ju
 spec:
   maxUnavailable: 1
   selector:
