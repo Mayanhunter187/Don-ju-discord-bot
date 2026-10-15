@@ -11,6 +11,11 @@ updates:
         patterns: ["yt-dlp*"]
       python-packages:
         patterns: ["*"]
+    ignore:
+      # discord.py[voice] pins PyNaCl below 1.6, so newer releases can't install
+      # until discord.py raises that limit
+      - dependency-name: pynacl
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: docker
     directory: /
