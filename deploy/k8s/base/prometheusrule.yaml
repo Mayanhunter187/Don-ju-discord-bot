@@ -17,6 +17,19 @@ spec:
             description: >-
               Neither replica has held the don-ju-leader lease for 2 minutes. Check
               the pods in the don-ju namespace and their logs.
+        - alert: DonJuDisconnected
+          expr: |
+            sum(donju_leader{namespace="don-ju"}) >= 1
+            and sum(donju_discord_connected{namespace="don-ju"}) < 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Don'Ju's leader has lost its Discord connection
+            description: >-
+              A replica holds the don-ju-leader lease but hasn't been connected to
+              Discord for 5 minutes, so the bot is offline. Check the leader pod's
+              logs for gateway or login errors.
         - alert: DonJuYoutubeFailing
           expr: |
             sum(rate(donju_ytdl_calls_total{namespace="don-ju",result="error"}[15m]))

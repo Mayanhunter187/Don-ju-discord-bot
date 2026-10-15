@@ -57,6 +57,16 @@ class MusicBot(commands.Bot):
     async def on_ready(self):
         log.info(f'Logged in as {self.user} (ID: {self.user.id})')
 
+    # discord.py reconnects by itself, so these track whether it's connected now
+    async def on_connect(self):
+        metrics.DISCORD_CONNECTED.set(1)
+
+    async def on_resumed(self):
+        metrics.DISCORD_CONNECTED.set(1)
+
+    async def on_disconnect(self):
+        metrics.DISCORD_CONNECTED.set(0)
+
     async def on_app_command_completion(self, interaction, command):
         metrics.COMMANDS.labels(command.qualified_name).inc()
 
@@ -134,6 +144,7 @@ async def main():
                     raise task.exception()
     finally:
         metrics.LEADER.set(0)
+        metrics.DISCORD_CONNECTED.set(0)
         if elector:
             await elector.release()
         if kube:

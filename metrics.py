@@ -1,7 +1,8 @@
 """Prometheus metrics, served on METRICS_PORT (default 8000) at /metrics."""
 from prometheus_client import Counter, Gauge, Histogram
 
-LEADER = Gauge('donju_leader', '1 if this replica holds the leader lease and is connected to Discord')
+LEADER = Gauge('donju_leader', '1 if this replica holds the leader lease')
+DISCORD_CONNECTED = Gauge('donju_discord_connected', '1 while this replica has a live Discord gateway connection')
 DISCORD_LATENCY = Gauge('donju_discord_latency_seconds', 'Discord gateway heartbeat latency')
 VOICE_CONNECTIONS = Gauge('donju_voice_connections', 'Voice channels the bot is connected to')
 QUEUE_LENGTH = Gauge('donju_queue_length', 'Songs waiting in all queues, not counting the ones playing')
