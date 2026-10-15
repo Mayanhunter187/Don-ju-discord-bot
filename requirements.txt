@@ -1,7 +1,7 @@
 # Direct dependencies, pinned. Dependabot proposes updates weekly.
 discord.py[voice]==2.7.1
 # Voice encryption (DAVE) support for discord.py
-davey==0.1.6
+davey==0.1.7
 python-dotenv==1.2.4
 # [default] adds yt-dlp-ejs, which solves YouTube's JS challenges locally with Node.js
 yt-dlp[default]==2026.8.19
