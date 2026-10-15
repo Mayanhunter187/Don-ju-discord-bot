@@ -21,34 +21,32 @@ Songs longer than 10 minutes are refused.
 ## How it runs
 
 Two copies of the bot run on the homelab k3s cluster, each a separate Discord
-application with its own token:
+application with its own token. Each one follows its own branch:
 
-| Environment | Namespace | Manifests | Gets a build |
+| Bot | Branch | Namespace | Manifests |
 |---|---|---|---|
-| test | `don-ju-test` | `deploy/k8s/overlays/test` | as soon as it's built |
-| production | `don-ju` | `deploy/k8s/overlays/prod` | after you approve it |
+| main | `main` | `don-ju` | `deploy/k8s/overlays/prod` |
+| test | `test` | `don-ju-test` | `deploy/k8s/overlays/test` |
 
-Both overlays build on the shared manifests in `deploy/k8s/base`. Each image is
-built once and the same image moves from test to production.
+Both overlays build on the shared manifests in `deploy/k8s/base`.
 
-1. A push to `main` that touches code runs ruff and the tests, builds an
-   image, smoke-tests it, and pushes it to
+1. A push to `test` or `main` that touches code runs ruff and the tests,
+   builds an image, smoke-tests it, and pushes it to
    `ghcr.io/mayanhunter187/don-ju-discord-bot` with the tag `<date>-<short sha>`.
-2. The workflow commits that tag to the test overlay, and Argo CD rolls it out
-   to the test bot.
-3. The `deploy-prod` job then waits for approval on the `production`
-   environment. Check the test bot in Discord, then open the run on GitHub and
-   choose **Review deployments → Approve**. The job commits the same tag to the
-   prod overlay. Only `main` can deploy to production.
+2. The workflow commits that tag to the branch's own overlay, on the same
+   branch.
+3. Argo CD keeps each bot's overlay on its branch applied to the cluster and
+   rolls out the new image.
 
-To try a change on the test bot before it reaches `main`, push it to the `test`
-branch, or run the workflow by hand on any branch (Actions →
-build-and-publish → Run workflow). Those runs stop after step 2. The deploy
-commits always land on `main`, since that's the branch Argo CD watches.
+To try a change, commit it to `test` and check it with the test bot. When it
+works, merge `test` into `main` with a pull request ("Create a merge commit",
+not squash, since `test` is never deleted) and the main bot gets it. Changes to
+the manifests follow the same path, so a change to `base` reaches the test bot
+first too.
 
-Pull requests run the lint and tests only. Dependabot opens PRs every week for
-Python packages (yt-dlp separately, since it has to keep up with YouTube) and
-for the base images.
+Pull requests run the lint and tests only. Dependabot opens PRs against `test`
+every week for Python packages (yt-dlp separately, since it has to keep up with
+YouTube) and for the base images, so updates reach the test bot first.
 
 The Argo CD Applications and the Secrets are created by the
 [homelab](https://github.com/Mayanhunter187/homelab) Ansible roles. External
@@ -56,10 +54,10 @@ Secrets keeps the Secrets in sync with AWS SSM Parameter Store every hour, and
 the bot reads the cookie file fresh for every yt-dlp call, so updated cookies
 take effect without a restart:
 
-| Secret | Key | Parameter (production) | Parameter (test) |
+| Secret | Key | Parameter (main bot) | Parameter (test bot) |
 |---|---|---|---|
 | `discord-bot-secret` | `token` | `/homelab/don-ju/discord-token` | `/homelab/don-ju-test/discord-token` |
-| `youtube-cookies` | `cookies.txt` | `/homelab/don-ju/youtube-cookies` | the same as production |
+| `youtube-cookies` | `cookies.txt` | `/homelab/don-ju/youtube-cookies` | the same as the main bot |
 
 ### High availability
 
@@ -86,7 +84,7 @@ Each replica serves Prometheus metrics on port 8000 at `/metrics` (leader
 status, songs played, yt-dlp calls and timings, queue length, cache size,
 command counts). The cluster's Prometheus scrapes them through the PodMonitor in
 `deploy/k8s/base`. The "Don'Ju" Grafana dashboard ships with the prod overlay
-and covers both bots; pick one in its "Bot" dropdown. Only production has
+and covers both bots; pick one in its "Bot" dropdown. Only the main bot has
 alerts, so a broken test build never pages anyone.
 
 To see which replica is leading:

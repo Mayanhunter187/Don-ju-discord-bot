@@ -1,6 +1,6 @@
-# The test bot: a separate Discord app that gets every build before production.
-# CI sets newTag on each build. No alerts here, so a broken test build never
-# pages anyone.
+# The test bot, a separate Discord app. Argo CD deploys this folder from the
+# test branch, and CI sets newTag on every push to test. No alerts here, so a
+# broken test build never pages anyone.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: don-ju-test

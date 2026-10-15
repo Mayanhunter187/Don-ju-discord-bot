@@ -1,7 +1,10 @@
 version: 2
+# Every update targets the test branch, so it runs on the test bot before it's
+# merged into main
 updates:
   - package-ecosystem: pip
     directory: /
+    target-branch: test
     schedule:
       interval: weekly
     groups:
@@ -19,6 +22,7 @@ updates:
 
   - package-ecosystem: docker
     directory: /
+    target-branch: test
     schedule:
       interval: weekly
     ignore:
@@ -28,5 +32,6 @@ updates:
 
   - package-ecosystem: github-actions
     directory: /
+    target-branch: test
     schedule:
       interval: monthly

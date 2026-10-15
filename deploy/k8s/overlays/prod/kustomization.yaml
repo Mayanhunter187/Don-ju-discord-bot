@@ -1,4 +1,5 @@
-# The main bot. CI sets newTag once a build is approved for production.
+# The main bot. Argo CD deploys this folder from the main branch, and CI sets
+# newTag on every push to main.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: don-ju

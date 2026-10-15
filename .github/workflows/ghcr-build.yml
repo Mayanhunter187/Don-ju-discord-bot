@@ -1,8 +1,7 @@
 name: build-and-publish
 
-# Every build goes to the test bot first. Builds from main then wait for an
-# approval (the production environment) before the main bot gets the same image.
-# A push to the test branch, or a manual run on any branch, stops at the test bot.
+# Each branch runs its own bot: a push to test updates the test bot, a push to
+# main updates the main bot. Argo CD watches each bot's overlay on its branch.
 on:
   push:
     branches: [main, test]
@@ -40,7 +39,7 @@ jobs:
 
   build:
     needs: test
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && (github.ref_name == 'main' || github.ref_name == 'test')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -65,10 +64,10 @@ jobs:
         with:
           context: .
           push: true
-          # The floating main tag only ever points at a build from main
+          # Plus a floating tag for the branch: main or test
           tags: |
             ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
-            ${{ github.ref == 'refs/heads/main' && format('{0}:main', env.IMAGE) || '' }}
+            ${{ env.IMAGE }}:${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
@@ -87,53 +86,21 @@ jobs:
 
       - run: echo "Pushed \`${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
 
-  # Point an overlay at the new image; Argo CD rolls it out. The tag is
-  # committed to main whichever branch was built, since Argo CD watches main.
-  deploy-test:
+  # Point this branch's bot at the new image, on the same branch; Argo CD rolls it out
+  deploy:
     needs: build
     runs-on: ubuntu-latest
-    environment: test
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: main
+          ref: ${{ github.ref_name }}
 
       - name: Commit the new image tag
         env:
           TAG: ${{ needs.build.outputs.tag }}
-          OVERLAY: deploy/k8s/overlays/test
-        run: |
-          sed -i -E "s#(newTag:).*#\1 ${TAG}#" "$OVERLAY/kustomization.yaml"
-          if git diff --quiet; then echo "Already deployed"; exit 0; fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "Deploy ${TAG} to $(basename "$OVERLAY")"
-          for attempt in 1 2 3; do
-            git push && exit 0
-            git pull --rebase
-          done
-          exit 1
-
-  # Waits for a reviewer to approve the production environment, which only
-  # main can deploy to. Check the test bot first.
-  deploy-prod:
-    needs: [build, deploy-test]
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    environment: production
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: main
-
-      - name: Commit the new image tag
-        env:
-          TAG: ${{ needs.build.outputs.tag }}
-          OVERLAY: deploy/k8s/overlays/prod
+          OVERLAY: deploy/k8s/overlays/${{ github.ref_name == 'main' && 'prod' || 'test' }}
         run: |
           sed -i -E "s#(newTag:).*#\1 ${TAG}#" "$OVERLAY/kustomization.yaml"
           if git diff --quiet; then echo "Already deployed"; exit 0; fi
