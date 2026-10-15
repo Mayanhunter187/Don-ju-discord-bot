@@ -10,4 +10,4 @@ resources:
   - prometheusrule.yaml
 images:
   - name: ghcr.io/mayanhunter187/don-ju-discord-bot
-    newTag: 20261015-af62744
+    newTag: 20261015-7eb3630
