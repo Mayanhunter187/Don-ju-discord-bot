@@ -13,3 +13,6 @@ songs/
 tests/
 .pytest_cache
 .ruff_cache
+# Not needed to run the bot
+deploy/
+*.md

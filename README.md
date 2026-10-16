@@ -46,7 +46,8 @@ first too.
 
 Pull requests run the lint and tests only. Dependabot opens PRs against `test`
 every week for Python packages (yt-dlp separately, since it has to keep up with
-YouTube) and for the base images, so updates reach the test bot first.
+YouTube) and for the images in the Dockerfile (Python, ffmpeg and Node.js), so
+updates reach the test bot first.
 
 The Argo CD Applications and the Secrets are created by the
 [homelab](https://github.com/Mayanhunter187/homelab) Ansible roles. External

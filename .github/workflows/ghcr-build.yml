@@ -76,11 +76,11 @@ jobs:
       - name: Smoke-test the image
         run: |
           docker run --rm --read-only --tmpfs /tmp "$IMAGE:${{ steps.meta.outputs.tag }}" python -c "
-          import os, shutil
+          import os, subprocess
           import main, cogs.music, cogs.help, yt_dlp_ejs
           assert os.getuid() != 0, 'container runs as root'
-          for tool in ('ffmpeg', 'node'):
-              assert shutil.which(tool), f'{tool} missing'
+          for tool in (['ffmpeg', '-version'], ['node', '--version']):
+              print(subprocess.run(tool, check=True, capture_output=True, text=True).stdout.splitlines()[0])
           print('image ok')
           "
 
