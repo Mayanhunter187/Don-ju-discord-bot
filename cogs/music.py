@@ -18,7 +18,7 @@ import songstore
 
 log = logging.getLogger(__name__)
 
-# YouTube DL options
+# yt-dlp options
 ytdl_format_options = {
     'format': 'ba/b',
     'outtmpl': 'songs/%(id)s.%(ext)s',
@@ -26,10 +26,7 @@ ytdl_format_options = {
     'updatetime': False,  # mtime = download time, which cache eviction relies on
     'restrictfilenames': True,
     'noplaylist': True,
-    'ignoreerrors': False,
-    'logtostderr': False,
     'quiet': True,
-    'no_warnings': False,
     'noprogress': True,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
@@ -46,12 +43,8 @@ ytdl_format_options = {
 # is a read-only Secret mount that External Secrets keeps up to date.
 COOKIES_FILE = os.getenv('COOKIES_FILE_PATH', '/app/cookies.txt')
 
-ffmpeg_options_stream = {
-    'options': '-vn',
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
-}
-
-ffmpeg_options_local = {
+# Songs always play from a file in the cache
+ffmpeg_options = {
     'options': '-vn'
 }
 
@@ -68,10 +61,28 @@ ytdl_slots = asyncio.Semaphore(2)
 CACHE_MAX_BYTES = int(os.getenv('CACHE_MAX_BYTES', 4 * 1024**3))
 CACHE_TEMP_SUFFIXES = ('.part', '.ytdl', '.temp')
 
+# Songs longer than this are refused
+MAX_SONG_SECONDS = 600
+
 # Fields of a song's info dict kept in the saved queue. The full dict is
 # hundreds of KB, too big for the ConfigMap the queue is saved to.
 STATE_SONG_KEYS = ('id', 'ext', 'title', 'webpage_url', 'duration', 'thumbnail',
                    'uploader', 'requested_by', '_resume_position')
+
+FLAVOR_TEXTS = {
+    "download": [
+        "⬇️ **Intercepting transmission...** Downloading `{query}`...",
+        "📡 **Acquiring signal...** Fetching `{query}`...",
+        "👾 **Decoding matrix...** Downloading `{query}`...",
+        "⚡ **Charging capacitors...** Getting `{query}` ready...",
+    ],
+    "cache": [
+        "💿 **Dusting off the vinyl...** Found `{query}` in cache!",
+        "💾 **Loading from memory banks...** `{query}` is ready!",
+        "📼 **Rewinding tape...** `{query}` found locally!",
+        "📦 **Unboxing archives...** `{query}` is cached!",
+    ],
+}
 
 def trim_song(song):
     return {k: song[k] for k in STATE_SONG_KEYS if k in song}
@@ -79,6 +90,25 @@ def trim_song(song):
 def cached_first(results):
     """Search results with cached songs first, each group in YouTube's order (best match first)."""
     return sorted(results, key=lambda song: not song['is_cached'])
+
+def fmt_duration(seconds):
+    """m:ss, or ? when the length is unknown (live streams have none)."""
+    if seconds is None:
+        return "?"
+    return f"{int(seconds // 60)}:{int(seconds % 60):02d}"
+
+def shorten(text, limit):
+    return text if len(text) <= limit else text[:limit - 3] + "..."
+
+def link(title, url):
+    return f"[{title}]({url})" if url else title
+
+def check_length(song):
+    """Refuse songs longer than MAX_SONG_SECONDS."""
+    duration = song.get('duration')
+    if duration and duration > MAX_SONG_SECONDS:
+        raise ValueError(f"❌ **Song Too Long**: This video is {int(duration // 60)}m {int(duration % 60):02d}s, "
+                         f"but the limit is {MAX_SONG_SECONDS // 60} minutes. Please choose a shorter song.")
 
 def cache_stats():
     """Return (total bytes, number of songs) in the cache."""
@@ -90,6 +120,25 @@ def cache_stats():
                 if not entry.name.endswith(('.json',) + CACHE_TEMP_SUFFIXES):
                     songs += 1
     return total, songs
+
+def cached_audio():
+    """(video id, file name, size) of each song file in the cache."""
+    if not os.path.isdir('songs'):
+        return []
+    return [(entry.name.rsplit('.', 1)[0], entry.name, entry.stat().st_size)
+            for entry in os.scandir('songs')
+            if entry.is_file() and not entry.name.endswith(('.json',) + CACHE_TEMP_SUFFIXES)]
+
+def info_file(video_id):
+    return os.path.join('songs', f'{video_id}.info.json')
+
+def read_info(video_id):
+    """A cached song's info.json, or None if it's missing or unreadable."""
+    try:
+        with open(info_file(video_id)) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
 
 @contextlib.contextmanager
 def _ytdl():
@@ -147,6 +196,14 @@ async def extract_info(url, **kwargs):
         kind = 'extract'
     return await _in_slot(kind, _run_ytdl, url, kwargs)
 
+async def song_info(url):
+    """Look a song up without downloading it."""
+    data = await extract_info(url, download=False)
+    if 'entries' in data:
+        # A playlist or search: take the first item
+        data = data['entries'][0]
+    return data
+
 async def download(info):
     """Download a song into the cache.
 
@@ -168,10 +225,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
         super().__init__(source, volume)
         self.data = data
         self.title = data.get('title')
-        self.url = data.get('url')
         self.thumbnail = data.get('thumbnail')
         self.duration = data.get('duration')
-        self.uploader = data.get('uploader')
         self.requested_by = data.get('requested_by')
         self.is_cached = is_cached
         # cache | store | download: where the audio file came from
@@ -179,56 +234,28 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.webpage_url = data.get('webpage_url')
 
     @classmethod
-    async def from_url(cls, url, *, loop=None, stream=False):
-        # This method is now a wrapper that does both extraction and creation
-        # Useful for the player loop if it encounters a raw string
-        loop = loop or asyncio.get_event_loop()
-        data = await cls.get_info(url, loop=loop, stream=stream)
-        return cls.create_from_data(data, stream=stream)
-
-    @classmethod
-    async def get_info(cls, url, *, loop=None, stream=False):
-        data = await extract_info(url, download=not stream)
-
-        if 'entries' in data:
-            # take first item from a playlist
-            data = data['entries'][0]
-        return data
-
-    @classmethod
-    def create_from_data(cls, data, stream=False, is_cached=False, seek_offset=0, origin=None):
-        # Max length check (10 minutes = 600 seconds)
-        duration = data.get('duration')
-        if duration and duration > 600:
-            raise ValueError(f"❌ **Song Too Long**: This video is {int(duration//60)}m {int(duration%60)}s, but the limit is 10 minutes. Please choose a shorter song.")
-
-        filename = data['url'] if stream else ytdl.prepare_filename(data)
-        options = ffmpeg_options_stream.copy() if stream else ffmpeg_options_local.copy()
-        
-        # Apply seek if resuming from a position
+    def create_from_data(cls, data, is_cached=False, seek_offset=0, origin=None):
+        """An audio source for a song in the cache, starting seek_offset seconds in."""
+        check_length(data)
+        options = dict(ffmpeg_options)
         if seek_offset > 0:
-            before_opts = options.get('before_options', '')
-            if before_opts:
-                before_opts += f" -ss {int(seek_offset)}"
-            else:
-                before_opts = f"-ss {int(seek_offset)}"
-            options['before_options'] = before_opts
-            log.debug(f"Applied seek offset {int(seek_offset)} seconds to FFmpeg options")
-        return cls(discord.FFmpegPCMAudio(filename, **options), data=data, is_cached=is_cached, origin=origin)
+            options['before_options'] = f"-ss {int(seek_offset)}"
+        return cls(discord.FFmpegPCMAudio(ytdl.prepare_filename(data), **options),
+                   data=data, is_cached=is_cached, origin=origin)
 
 class MusicPlayer:
     def __init__(self, bot, guild, channel):
         self.bot = bot
         self.guild = guild
         self.channel = channel
-        self.queue = asyncio.Queue()
+        self.queue = asyncio.Queue()  # info dicts of the songs waiting
         self.next = asyncio.Event()
 
-        self.np = None  # Now playing message
         self.volume = .5
         self.current = None
         self.playback_start_time = None  # Track when playback started
         self.seek_position = 0  # Position to seek to when resuming (in seconds)
+        self.resumed_from_state = False  # set when the queue was restored after a restart
         self.save_task = None  # Saves state every 10s while a song plays
 
         self.bot.loop.create_task(self.player_loop())
@@ -240,127 +267,83 @@ class MusicPlayer:
             self.next.clear()
 
             try:
-                # Wait for the next song. If we timeout cancel the player and disconnect...
-                async with asyncio.timeout(300):  # 5 minutes
-                    source = await self.queue.get()
-            except asyncio.TimeoutError:
+                # Wait for the next song; after 5 minutes with nothing queued, leave
+                async with asyncio.timeout(300):
+                    song = await self.queue.get()
+            except TimeoutError:
                 return self.destroy(self.guild)
 
-            if isinstance(source, dict):
-                # It's pre-fetched data
-                try:
-                    # Local cache, then the shared song store, then YouTube
-                    origin = await self.bot.get_cog("Music").fetch_song(source)
+            try:
+                # Local cache, then the shared song store, then YouTube
+                origin = await self.bot.get_cog("Music").fetch_song(song)
+                source = YTDLSource.create_from_data(song, is_cached=origin != 'download',
+                                                     seek_offset=self.seek_position, origin=origin)
+                self.seek_position = 0
+            except ValueError as e:
+                await self.channel.send(f"{e}")
+                continue
+            except Exception as e:
+                log.warning(f"Error converting data: {e}")
+                await self.channel.send(f'Error creating audio source: {e}')
+                continue
 
-                    # Create source from local file (stream=False), applying seek if resuming
-                    source = YTDLSource.create_from_data(source, stream=False, is_cached=origin != 'download',
-                                                         seek_offset=self.seek_position, origin=origin)
-                    # Reset seek position after applying
-                    if self.seek_position > 0:
-                        log.debug(f"Resumed from {self.seek_position} seconds")
-                        self.seek_position = 0
-                except ValueError as e:
-                    await self.channel.send(f"{e}")
-                    continue
-                except Exception as e:
-                    log.warning(f"Error converting data: {e}")
-                    await self.channel.send(f'Error creating audio source: {e}')
-                    continue
-            
-            # Now we have a YTDLSource object
             self.current = source
-
-            log.debug(f"source type: {type(source)}")
-            if hasattr(source, 'title'):
-                log.debug(f"source.title: {source.title}")
-            # YTDLSource is already a PCMVolumeTransformer, we can use it directly
-            # But we need to apply volume
             source.volume = self.volume
 
             try:
-                log.debug(f"Playing {source.title}")
                 def after_callback(error):
                     if error:
                         log.debug(f"Player error: {error}")
-                    log.debug("Song finished/stopped, triggering next...")
                     self.bot.loop.call_soon_threadsafe(self.next.set)
 
-                # Track when playback starts
                 self.playback_start_time = time.time()
-                
                 self.guild.voice_client.play(source, after=after_callback)
                 metrics.SONGS_PLAYED.labels(source.origin).inc()
-                
+
                 # Set bot status to "Listening to [Song Name]"
                 await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=source.title))
-                
-                # Save state AFTER playback has started (so playback_start_time is set)
-                
-                # Create Embed for Now Playing (Purple, Large Image)
+
                 embed = discord.Embed(title="Now Playing", description=f"[{source.title}]({source.webpage_url})", color=discord.Color.purple())
                 if source.thumbnail:
                     embed.set_image(url=source.thumbnail)
                 if source.duration:
-                    embed.add_field(name="Duration", value=f"{int(source.duration//60)}:{int(source.duration%60):02d}", inline=True)
-                
-                # Add Cache Status
-                if source.is_cached:
-                    embed.add_field(name="Source", value="💾 Cached", inline=True)
-                else:
-                    embed.add_field(name="Source", value="☁️ New", inline=True)
-                
+                    embed.add_field(name="Duration", value=fmt_duration(source.duration), inline=True)
+                embed.add_field(name="Source", value="💾 Cached" if source.is_cached else "☁️ New", inline=True)
                 if source.requested_by:
                     embed.add_field(name="Requested By", value=source.requested_by, inline=True)
-                
-                # Check if this is a resumed playback after bot restart
-                # Only show footer if we actually resumed from a position (not just started from beginning)
-                show_resumed_footer = False
-                if hasattr(self, '_resumed_from_state') and self._resumed_from_state:
-                    # Check if this song had a resume position marker
-                    if isinstance(source, YTDLSource) and hasattr(source, 'data'):
-                        if '_resume_position' in source.data and source.data['_resume_position'] > 0:
-                            show_resumed_footer = True
-                    # Clear the flag after first song (whether resumed or not)
-                    self._resumed_from_state = False
-                
-                if show_resumed_footer:
-                    resume_pos = source.data['_resume_position']
-                    mins = int(resume_pos // 60)
-                    secs = int(resume_pos % 60)
-                    embed.set_footer(text=f"🔄 Resumed after bot restart at {mins}:{secs:02d}", icon_url=None)
-                
-                self.np = await self.channel.send(embed=embed)
-                
-                # Start periodic state saving (every 10 seconds during playback)
+
+                # The first song after a restart says where it picked up, if not from the start
+                resume_position = song.get('_resume_position', 0)
+                if self.resumed_from_state and resume_position > 0:
+                    embed.set_footer(text=f"🔄 Resumed after bot restart at {fmt_duration(resume_position)}")
+                self.resumed_from_state = False
+
+                await self.channel.send(embed=embed)
+
+                # Save the queue and position every 10 seconds while the song plays
                 async def periodic_save():
-                    await asyncio.sleep(10)  # Wait 10 seconds before first save
+                    await asyncio.sleep(10)
                     while self.guild.voice_client and self.guild.voice_client.is_playing():
                         self.bot.get_cog("Music").save_state()
-                        await asyncio.sleep(10)  # Save every 10 seconds
-                
+                        await asyncio.sleep(10)
+
                 # A skip within 10s would otherwise leave the old loop running too
                 if self.save_task:
                     self.save_task.cancel()
                 self.save_task = self.bot.loop.create_task(periodic_save())
             except Exception as e:
-                log.debug(f"Exception in play: {e}")
+                log.warning(f"Error starting playback: {e}")
                 await self.channel.send(f"Error starting playback: {e}")
-                self.next.set() # Ensure we don't get stuck
+                self.next.set()  # Ensure we don't get stuck
 
             await self.next.wait()
-            log.debug("Wait finished, cleaning up...")
-            # Make sure the FFmpeg process is cleaned up.
+            # Make sure the FFmpeg process is cleaned up
             try:
                 source.cleanup()
-            except ValueError:
-                log.debug("Source already cleaned up (ValueError ignored)")
             except Exception as e:
                 log.debug(f"Error cleaning up source: {e}")
             self.current = None
-            # Reset status to default when song ends
             await self.bot.get_cog("Music").set_default_status()
-            
-            # Save state when song ends
             self.bot.get_cog("Music").save_state()
 
     def destroy(self, guild):
@@ -371,18 +354,10 @@ class MusicPlayer:
 
 class SearchButton(ui.Button):
     def __init__(self, title, url, is_cached, cog, interaction_user):
-        # Button labels can be max 80 chars, truncate smartly
-        # Format: "Song Title Here..."
-        if len(title) > 77:
-            label = title[:74] + "..."
-        else:
-            label = title
-        
-        # Use different colors for cached vs new
+        # Cached songs are green, new downloads blue; labels hold 80 characters
         style = discord.ButtonStyle.green if is_cached else discord.ButtonStyle.blurple
         emoji = "💾" if is_cached else "☁️"
-        
-        super().__init__(style=style, label=label, emoji=emoji)
+        super().__init__(style=style, label=shorten(title, 80), emoji=emoji)
         self.video_url = url
         self.cog = cog
         self.interaction_user = interaction_user
@@ -391,11 +366,7 @@ class SearchButton(ui.Button):
         # Only the requester can click
         if interaction.user != self.interaction_user:
             return await interaction.response.send_message("This search menu is not for you!", ephemeral=True)
-        
-        # Defer the interaction (acknowledges it)
         await interaction.response.defer()
-        
-        # Queue the song
         await self.cog.queue_song(interaction, self.video_url)
 
 class SearchView(ui.View):
@@ -409,25 +380,10 @@ class SearchView(ui.View):
         # Only the requester can cancel
         if interaction.user != self.interaction_user:
             return await interaction.response.send_message("❌ This search menu is not for you!", ephemeral=True)
-        
-        # Acknowledge the interaction and delete the message
-        try:
+        # Remove the search menu; it may be gone already
+        with contextlib.suppress(discord.NotFound):
             await interaction.response.defer()
             await interaction.delete_original_response()
-        except discord.NotFound:
-            # Message already deleted, that's fine
-            pass
-        except Exception:
-            # Fallback: just edit the message
-            try:
-                cancel_embed = discord.Embed(
-                    title="❌ Search Cancelled",
-                    description="Search has been cancelled.",
-                    color=discord.Color.red()
-                )
-                await interaction.response.send_message(embed=cancel_embed, ephemeral=True)
-            except Exception:
-                pass
 
 class Music(commands.Cog):
     def __init__(self, bot):
@@ -483,6 +439,13 @@ class Music(commands.Cog):
             self.song_store.upload_later(filename)
         return 'download'
 
+    async def prefetch(self, song):
+        """Download a queued song before its turn comes."""
+        try:
+            await self.fetch_song(song)
+        except Exception as e:
+            log.warning(f"Background download of {song.get('id')} failed, retrying when it plays: {e}")
+
     def cleanup_cache(self):
         """Evict least recently played songs until the cache fits CACHE_MAX_BYTES."""
         if not os.path.exists('songs'):
@@ -491,31 +454,27 @@ class Music(commands.Cog):
         # Never evict a song that is playing or queued
         in_use = set()
         for player in self.players.values():
-            if isinstance(player.current, YTDLSource):
+            if player.current:
                 in_use.add(player.current.data.get('id'))
-            for song in list(player.queue._queue):
-                if isinstance(song, dict):
-                    in_use.add(song.get('id'))
+            in_use.update(song.get('id') for song in list(player.queue._queue))
 
         total = 0
-        audio = []  # (mtime, size, video_id, path)
+        audio = []  # (mtime, video_id, path)
         for filename in os.listdir('songs'):
             path = os.path.join('songs', filename)
             if not os.path.isfile(path):
                 continue
-            size = os.path.getsize(path)
-            total += size
-            if filename.endswith('.json') or filename.endswith(CACHE_TEMP_SUFFIXES):
+            total += os.path.getsize(path)
+            if filename.endswith(('.json',) + CACHE_TEMP_SUFFIXES):
                 continue
-            audio.append((os.path.getmtime(path), size, filename.rsplit('.', 1)[0], path))
+            audio.append((os.path.getmtime(path), filename.rsplit('.', 1)[0], path))
 
-        for _, size, video_id, path in sorted(audio):
+        for _, video_id, path in sorted(audio):
             if total <= CACHE_MAX_BYTES:
                 break
             if video_id in in_use:
                 continue
-            info_path = os.path.join('songs', f'{video_id}.info.json')
-            for victim in (path, info_path):
+            for victim in (path, info_file(video_id)):
                 try:
                     total -= os.path.getsize(victim)
                     os.remove(victim)
@@ -523,6 +482,7 @@ class Music(commands.Cog):
                     pass
             log.info(f"Evicted {video_id} from cache")
             metrics.CACHE_EVICTIONS.inc()
+
     def cleanup_partial_files(self):
         """Clean up .part, .ytdl, and .temp files on startup."""
         if not os.path.exists('songs'):
@@ -534,30 +494,21 @@ class Music(commands.Cog):
                     os.remove(os.path.join('songs', filename))
                 except Exception as e:
                     log.warning(f"Failed to delete {filename}: {e}")
+
     def save_state(self):
-        """Saves the current queue and playback state."""
+        """Save each guild's queue, the playing song first with how far into it we are."""
         if self.frozen:
             return
         state = {}
         for guild_id, player in self.players.items():
             queue_list = []
-            
-            # Calculate current playback position if playing
-            current_position = 0
-            if player.current and player.playback_start_time:
-                elapsed = time.time() - player.playback_start_time
-                current_position = int(elapsed)
-            
-            # Add currently playing song to the front of the queue with position
             if player.current:
-                if isinstance(player.current, YTDLSource):
-                    current_song_data = trim_song(player.current.data)
-                    current_song_data['_resume_position'] = current_position  # Special marker
-                    queue_list.append(current_song_data)
-            
-            # Add rest of queue
-            queue_list.extend(trim_song(song) for song in player.queue._queue if isinstance(song, dict))
-            
+                current = trim_song(player.current.data)
+                elapsed = time.time() - player.playback_start_time if player.playback_start_time else 0
+                current['_resume_position'] = int(elapsed)
+                queue_list.append(current)
+            queue_list.extend(trim_song(song) for song in player.queue._queue)
+
             # Only save if there's something in the queue
             if queue_list:
                 state[guild_id] = {
@@ -565,109 +516,72 @@ class Music(commands.Cog):
                     'text_channel': player.channel.id,
                     'queue': queue_list
                 }
-        
+
         self.store.save(state)
 
     async def load_state(self):
-        """Loads the saved queue on startup."""
+        """Restore the saved queues after a restart, and say so in each guild's channel."""
         await self.bot.wait_until_ready()
-        log.debug("Loading state...")
         try:
             state = await self.store.load()
 
-            for guild_id_str, data in state.items():
-                guild_id = int(guild_id_str)
-                guild = self.bot.get_guild(guild_id)
-                if not guild:
+            for guild_id, data in state.items():
+                guild = self.bot.get_guild(int(guild_id))
+                queue = data['queue']
+                if not guild or not queue:
                     continue
-                    
                 voice_channel = guild.get_channel(data['voice_channel'])
                 text_channel = guild.get_channel(data['text_channel'])
-                
-                if voice_channel and text_channel:
-                    # Connect
-                    if not guild.voice_client or not guild.voice_client.is_connected():
-                        try:
-                            await voice_channel.connect()
-                            log.debug(f"Reconnected to voice channel {voice_channel.name}")
-                        except Exception as e:
-                            log.warning(f"Failed to reconnect voice: {e}")
-                            continue
-                    
-                    # Get player
-                    if guild.id not in self.players:
-                         player = MusicPlayer(self.bot, guild, text_channel)
-                         self.players[guild.id] = player
-                    else:
-                        player = self.players[guild.id]
+                if not (voice_channel and text_channel):
+                    continue
 
-                    # Populate queue
-                    for song_data in data['queue']:
-                        await player.queue.put(song_data)
-                    
-                    # Only send resume notification if we actually have songs to resume
-                    if not data['queue']:
-                        log.debug("Queue was empty, skipping resume notification")
+                if not guild.voice_client or not guild.voice_client.is_connected():
+                    try:
+                        await voice_channel.connect()
+                    except Exception as e:
+                        log.warning(f"Failed to reconnect voice: {e}")
                         continue
-                    
-                    # Check if first song has a resume position marker
-                    if data['queue'] and '_resume_position' in data['queue'][0]:
-                        resume_pos = data['queue'][0]['_resume_position']
-                        if resume_pos > 0:
-                            player.seek_position = resume_pos
-                            log.debug(f"Will resume from {resume_pos} seconds")
-                    # Set flag to indicate this is a resumed session
-                    player._resumed_from_state = True
-                    
-                    # Build queue preview (up to 10 songs)
-                    queue_preview = ""
-                    songs_to_show = min(10, len(data['queue']))
-                    for i, song in enumerate(data['queue'][:songs_to_show], 1):
-                        title = song.get('title', 'Unknown')
-                        # Truncate long titles
-                        if len(title) > 50:
-                            title = title[:47] + "..."
-                        
-                        # Show resume indicator for first song
-                        if i == 1 and '_resume_position' in song:
-                            mins = int(song['_resume_position'] // 60)
-                            secs = int(song['_resume_position'] % 60)
-                            queue_preview += f"`{i}.` {title} `(resuming at {mins}:{secs:02d})`\n"
-                        else:
-                            queue_preview += f"`{i}.` {title}\n"
-                    
-                    if len(data['queue']) > 10:
-                        queue_preview += f"\n*...and {len(data['queue']) - 10} more songs*"
-                    
-                    # Send resume notification
-                    resume_embed = discord.Embed(
-                        title="🔄 Bot Resumed",
-                        description="I'm back! Resuming playback from where we left off...",
-                        color=discord.Color.blue()
-                    )
-                    
-                    resume_embed.add_field(name="📋 Queue Status", value=f"**{len(data['queue'])}** song(s) queued", inline=False)
-                    
-                    if queue_preview:
-                        resume_embed.add_field(name="🎵 Up Next", value=queue_preview, inline=False)
-                    
-                    resume_embed.set_footer(text="▶️ Starting playback now")
-                    await text_channel.send(embed=resume_embed)
-                    
-                    log.debug(f"Restored queue for guild {guild.name}")
+
+                player = self.players.get(guild.id)
+                if player is None:
+                    player = self.players[guild.id] = MusicPlayer(self.bot, guild, text_channel)
+                for song in queue:
+                    await player.queue.put(song)
+                # The first song was playing; pick it up where it was
+                player.seek_position = queue[0].get('_resume_position', 0)
+                player.resumed_from_state = True
+
+                # Up to 10 songs, the first with where it resumes
+                lines = []
+                for i, song in enumerate(queue[:10], 1):
+                    title = shorten(song.get('title', 'Unknown'), 50)
+                    if i == 1 and '_resume_position' in song:
+                        lines.append(f"`{i}.` {title} `(resuming at {fmt_duration(song['_resume_position'])})`")
+                    else:
+                        lines.append(f"`{i}.` {title}")
+                if len(queue) > 10:
+                    lines.append(f"\n*...and {len(queue) - 10} more songs*")
+
+                resume_embed = discord.Embed(
+                    title="🔄 Bot Resumed",
+                    description="I'm back! Resuming playback from where we left off...",
+                    color=discord.Color.blue()
+                )
+                resume_embed.add_field(name="📋 Queue Status", value=f"**{len(queue)}** song(s) queued", inline=False)
+                resume_embed.add_field(name="🎵 Up Next", value="\n".join(lines), inline=False)
+                resume_embed.set_footer(text="▶️ Starting playback now")
+                await text_channel.send(embed=resume_embed)
+
+                log.info(f"Restored {len(queue)} queued song(s) in {guild.name}")
         except Exception as e:
             log.warning(f"Error loading state: {e}")
-    async def cleanup(self, guild):
-        try:
-            await guild.voice_client.disconnect()
-        except AttributeError:
-            pass
 
-        try:
-            del self.players[guild.id]
-        except KeyError:
-            pass
-            
+    async def cleanup(self, guild):
+        """Leave voice in a guild and drop its player."""
+        if guild.voice_client:
+            await guild.voice_client.disconnect()
+        self.players.pop(guild.id, None)
+
         # Reset status if no other guilds are playing
         if not any(p.guild.voice_client and p.guild.voice_client.is_playing() for p in self.players.values()):
             await self.set_default_status()
@@ -685,11 +599,8 @@ class Music(commands.Cog):
             self.state_loaded = True
             await self.load_state()
 
-    async def __local_check(self, interaction: discord.Interaction):
-        # A local check which applies to all commands in this cog.
-        return True
-
     def get_player(self, interaction):
+        """The guild's player, created (bound to this text channel) if there isn't one."""
         try:
             player = self.players[interaction.guild.id]
         except KeyError:
@@ -697,224 +608,132 @@ class Music(commands.Cog):
             self.players[interaction.guild.id] = player
         return player
 
-
     async def queue_song(self, interaction: discord.Interaction, query: str):
-        """Helper to queue a song from URL."""
-        # Flavor Messages
-        flavor_texts = {
-            "download": [
-                "⬇️ **Intercepting transmission...** Downloading `{query}`...",
-                "📡 **Acquiring signal...** Fetching `{query}`...",
-                "👾 **Decoding matrix...** Downloading `{query}`...",
-                "⚡ **Charging capacitors...** Getting `{query}` ready..."
-            ],
-            "cache": [
-                "💿 **Dusting off the vinyl...** Found `{query}` in cache!",
-                "💾 **Loading from memory banks...** `{query}` is ready!",
-                "📼 **Rewinding tape...** `{query}` found locally!",
-                "📦 **Unboxing archives...** `{query}` is cached!"
-            ]
-        }
-
-        # Try to find in cache first (Optimization)
-        video_id = None
-        cached_data = None
-        is_cache_hit = False
-
-        # Extract Video ID
+        """Look a song up by URL and add it to the guild's queue."""
+        # A song cached here or in the song store needs no YouTube lookup
+        data = None
         match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', query)
         if match:
             video_id = match.group(1)
-            info_path = f'songs/{video_id}.info.json'
             # Another replica or the other bot may have stored it already
-            if not os.path.exists(info_path) and self.song_store:
-                await self.song_store.fetch(info_path, with_info=False)
-            if os.path.exists(info_path):
-                try:
-                    with open(info_path, 'r') as f:
-                        cached_data = json.load(f)
-                    is_cache_hit = True
-                except Exception as e:
-                    log.warning(f"Failed to load cache for {video_id}: {e}")
-        # Determine initial message content
-        initial_msg = ""
-        if is_cache_hit and cached_data:
-            initial_msg = random.choice(flavor_texts["cache"]).format(query=cached_data.get('title', query))
-            data = cached_data
-        else:
-            initial_msg = f"� **Establishing Connection...**\n\nAccessing: `{query}`"
+            if not os.path.exists(info_file(video_id)) and self.song_store:
+                await self.song_store.fetch(info_file(video_id), with_info=False)
+            if os.path.exists(info_file(video_id)):
+                data = read_info(video_id)
+                if not data:
+                    log.warning(f"Failed to load cache for {video_id}")
+        is_cache_hit = bool(data)
 
-        # Send/Update status using edit_original_response (works for both deferred commands and button interactions)
+        if is_cache_hit:
+            initial_msg = random.choice(FLAVOR_TEXTS["cache"]).format(query=data.get('title', query))
+        else:
+            initial_msg = f"🔗 **Establishing Connection...**\n\nAccessing: `{query}`"
+
+        # Works for both deferred commands and button clicks
         try:
             await interaction.edit_original_response(content=initial_msg, view=None, embed=None)
         except discord.NotFound:
-            # Fallback if original response is gone (rare)
             await interaction.followup.send(initial_msg)
 
-        if not (is_cache_hit and cached_data):
-            # Fetch info
+        if not is_cache_hit:
             try:
-                data = await YTDLSource.get_info(query, loop=self.bot.loop, stream=True)
+                data = await song_info(query)
             except Exception as e:
                 await interaction.edit_original_response(content=f"Error finding song: {e}")
                 return
-            
-            # Now check if audio file exists (Legacy Cache Check)
+
+            # The lookup names the song's file, which may be cached after all
             filename = ytdl.prepare_filename(data)
-            if os.path.exists(filename) or (self.song_store and await self.song_store.exists(filename)):
-                is_cache_hit = True
-                # Update message to Cache Hit
-                new_msg = random.choice(flavor_texts["cache"]).format(query=data.get('title', query))
-                await interaction.edit_original_response(content=new_msg)
-            else:
-                # Update message to Downloading
-                new_msg = random.choice(flavor_texts["download"]).format(query=data.get('title', query))
-                await interaction.edit_original_response(content=new_msg)
+            is_cache_hit = os.path.exists(filename) or bool(self.song_store and await self.song_store.exists(filename))
+            texts = FLAVOR_TEXTS["cache" if is_cache_hit else "download"]
+            await interaction.edit_original_response(content=random.choice(texts).format(query=data.get('title', query)))
 
         try:
+            check_length(data)
             player = self.get_player(interaction)
-            
-            # Check duration before queueing
-            duration = data.get('duration')
-            if duration and duration > 600:
-                raise ValueError(f"❌ **Song Too Long**: This video is {int(duration//60)}m {int(duration%60):02d}s, but the limit is 10 minutes. Please choose a shorter song.")
-            
-            # Add requester info
             data['requested_by'] = interaction.user.name
-            
+
             # Check if this will play immediately or be queued
             vc = interaction.guild.voice_client
-            will_play_immediately = (player.queue.empty() and (not vc or not vc.is_playing()))
-            
+            will_play_immediately = player.queue.empty() and (not vc or not vc.is_playing())
+
             await player.queue.put(data)
-            
-            # Start background download if not cached and not playing immediately
-            if not is_cache_hit and not will_play_immediately:
-                # Download in background without blocking
-                async def background_download():
-                    try:
-                        log.debug(f"Starting background download for {data.get('title', 'Unknown')}")
-                        # This will download and cache the file
-                        await self.fetch_song(data)
-                        log.debug(f"Background download complete for {data.get('title', 'Unknown')}")
-                    except Exception as e:
-                        log.debug(f"Background download failed: {e}")
-                # Start download task without awaiting (fire and forget)
-                self.bot.loop.create_task(background_download())
-            
-            # Only show "Queued" message if song won't play immediately
+
             if not will_play_immediately:
-                # Create Embed for Public Queue Log
+                # Download it while it waits its turn
+                if not is_cache_hit:
+                    self.bot.loop.create_task(self.prefetch(data))
+
                 embed = discord.Embed(title="Queued", description=f"[{data['title']}]({data['webpage_url']})", color=discord.Color.green())
                 if data.get('thumbnail'):
                     embed.set_image(url=data['thumbnail'])
                 if data.get('duration'):
-                    embed.add_field(name="Duration", value=f"{int(data['duration']//60)}:{int(data['duration']%60):02d}")
-                
-                # Add position info
-                queue_pos = player.queue.qsize()
-                embed.add_field(name="Position in Queue", value=f"#{queue_pos}", inline=True)
+                    embed.add_field(name="Duration", value=fmt_duration(data['duration']))
+                embed.add_field(name="Position in Queue", value=f"#{player.queue.qsize()}", inline=True)
                 embed.add_field(name="Requested By", value=interaction.user.mention, inline=True)
-
-                if is_cache_hit:
-                    embed.set_footer(text="💾 Instant Load (Cached)")
-                else:
-                    embed.set_footer(text="☁️ New Download")
-
-                # Send Public Embed
+                embed.set_footer(text="💾 Instant Load (Cached)" if is_cache_hit else "☁️ New Download")
                 await interaction.channel.send(embed=embed)
 
-            # Close Ephemeral Interaction (Delete it so it vanishes)
+            # The status message was only for the requester; remove it
             try:
                 await interaction.delete_original_response()
             except Exception:
                 # Fallback if delete fails (e.g. too old), just edit to empty
                 await interaction.edit_original_response(content="✅ Queued", embed=None, view=None)
-            
-            # Save state
+
             self.save_state()
-            
+
         except ValueError as e:
-             await interaction.edit_original_response(content=f"{e}")
+            await interaction.edit_original_response(content=f"{e}")
         except Exception as e:
-             await interaction.edit_original_response(content=f"An error occurred: {e}")
+            await interaction.edit_original_response(content=f"An error occurred: {e}")
 
     @app_commands.command(name="play", description="Plays a song from YouTube")
     @app_commands.describe(search="The YouTube URL or search query (use 'random' for a random cached song)")
     async def play(self, interaction: discord.Interaction, search: str):
         """Plays a song."""
-        # Check if user is in voice channel first
         if not interaction.user.voice:
             return await interaction.response.send_message('❌ You need to be in a voice channel to play music!', ephemeral=True)
-        
-        # Handle "random" keyword - play random cached song
+
+        # "random": a song from this replica's cache
         if search.lower() == 'random':
-            if not os.path.exists('songs'):
+            cached = [video_id for video_id, _, _ in cached_audio() if os.path.exists(info_file(video_id))]
+            random.shuffle(cached)
+            info = next((info for info in map(read_info, cached) if info and info.get('webpage_url')), None)
+            if not info:
                 return await interaction.response.send_message('❌ No cached songs available!', ephemeral=True)
-            
-            # Get all cached audio files with their info
-            cached_songs = []
-            for filename in os.listdir('songs'):
-                if not filename.endswith(('.json', '.part', '.ytdl', '.temp')):
-                    video_id = filename.rsplit('.', 1)[0]
-                    info_path = os.path.join('songs', f'{video_id}.info.json')
-                    
-                    if os.path.exists(info_path):
-                        try:
-                            with open(info_path, 'r') as f:
-                                info = json.load(f)
-                                cached_songs.append(info['webpage_url'])
-                        except Exception:
-                            pass
-            
-            if not cached_songs:
-                return await interaction.response.send_message('❌ No cached songs available!', ephemeral=True)
-            
-            # Pick random song and notify
-            search = random.choice(cached_songs)
-            # Continue with normal flow using the random URL
-        
-        # Determine visibility based on input type
-        is_url = search.startswith(('http://', 'https://'))
-        
-        # Defer immediately so we have time to process
+            search = info['webpage_url']
+
+        # Always reply privately; the public messages come later
         try:
-            # Always make the response private (Ephemeral)
             await interaction.response.defer(ephemeral=True)
         except discord.HTTPException as e:
-            # If interaction is already acknowledged, we can proceed
-            if e.code == 40060:
-                pass
-            else:
+            # 40060: already acknowledged, which is fine
+            if e.code != 40060:
                 raise
-        
+
         # Creates the guild's player, bound to this text channel
         self.get_player(interaction)
 
         if interaction.guild.voice_client is None:
-            if interaction.user.voice:
-                # Send modern connection message
-                connecting_embed = discord.Embed(
-                    title="🔗 Establishing Connection",
-                    description=f"**Joining:** {interaction.user.voice.channel.name}\n\n🎵 Getting ready to play music...",
-                    color=discord.Color.green()
-                )
-                connecting_embed.set_footer(text="✅ Connected! Ready to play")
-                await interaction.followup.send(embed=connecting_embed, ephemeral=True)
-                await interaction.user.voice.channel.connect()
-            else:
+            # Checked again: the user may have left since the command started
+            if not interaction.user.voice:
                 await interaction.followup.send("❌ You need to be in a voice channel to play music!")
                 return
+            connecting_embed = discord.Embed(
+                title="🔗 Establishing Connection",
+                description=f"**Joining:** {interaction.user.voice.channel.name}\n\n🎵 Getting ready to play music...",
+                color=discord.Color.green()
+            )
+            connecting_embed.set_footer(text="✅ Connected! Ready to play")
+            await interaction.followup.send(embed=connecting_embed, ephemeral=True)
+            await interaction.user.voice.channel.connect()
 
-        # If URL, queue directly
-        if is_url:
+        # A URL is queued directly; anything else is a search
+        if search.startswith(('http://', 'https://')):
             await self.queue_song(interaction, search)
             return
 
-        # If Search Query, show menu
-        search_query = f"ytsearch5:{search}"
-        
-        # Send modern scanning message with blue theme
         embed = discord.Embed(
             title="🔍 Searching YouTube",
             description=f"**Query:** {search}\n\n🔄 Scanning YouTube's library...",
@@ -924,9 +743,9 @@ class Music(commands.Cog):
         scan_msg = await interaction.followup.send(embed=embed)
 
         try:
-            data = await extract_info(search_query, download=False, process=False)
-            
-            if 'entries' not in data or not data['entries']:
+            data = await extract_info(f"ytsearch5:{search}", download=False, process=False)
+            entries = data.get('entries') or []
+            if not entries:
                 error_embed = discord.Embed(
                     title="❌ No Results Found",
                     description=f"Couldn't find anything for: **{search}**\n\n💡 Try a different search term!",
@@ -935,54 +754,26 @@ class Music(commands.Cog):
                 await scan_msg.edit(embed=error_embed)
                 return
 
+            results = cached_first([{
+                'title': entry.get('title', 'Unknown Title'),
+                'url': entry.get('url', ''),
+                'is_cached': bool(entry.get('id')) and os.path.exists(info_file(entry['id'])),
+            } for entry in entries[:5]])
+
+            # One button per row, so the results read top to bottom
             view = SearchView(self, interaction.user)
-            
-            # Process top 5 results and check cache status
-            entries = list(data['entries'])
-            songs_with_cache_status = []
-            cached_count = 0
-            new_count = 0
-            
-            for entry in entries[:5]:
-                title = entry.get('title', 'Unknown Title')
-                url = entry.get('url', '')
-                video_id = entry.get('id')
-                
-                # Check cache status
-                is_cached = False
-                if video_id:
-                     if os.path.exists(f'songs/{video_id}.info.json'):
-                         is_cached = True
-                         cached_count += 1
-                     else:
-                         new_count += 1
-                
-                songs_with_cache_status.append({
-                    'title': title,
-                    'url': url,
-                    'is_cached': is_cached
-                })
-            
-            songs_with_cache_status = cached_first(songs_with_cache_status)
-            
-            # Add buttons in vertical list (one per row)
-            for i, song in enumerate(songs_with_cache_status):
+            for row, song in enumerate(results):
                 button = SearchButton(song['title'], song['url'], song['is_cached'], self, interaction.user)
-                # Assign each button to its own row for vertical stacking
-                button.row = i
+                button.row = row
                 view.add_item(button)
 
-            # Edit the scanning message to show clean bubble list
             results_embed = discord.Embed(
                 title="🎵 Select a Song",
                 description="Cached songs are shown first:",
                 color=discord.Color.blue()
             )
-            
-            # Optionally add thumbnail of first result for visual appeal
-            if entries and entries[0].get('thumbnail'):
+            if entries[0].get('thumbnail'):
                 results_embed.set_thumbnail(url=entries[0]['thumbnail'])
-            
             results_embed.set_footer(text="🟢 Cached (Instant) | 🔵 New Download")
             await scan_msg.edit(embed=results_embed, view=view)
 
@@ -994,71 +785,35 @@ class Music(commands.Cog):
             )
             error_embed.add_field(name="🔍 Error Details", value=f"```{str(e)[:200]}```", inline=False)
             await scan_msg.edit(embed=error_embed)
+
     @app_commands.command(name="skip", description="Skips the song")
     async def skip(self, interaction: discord.Interaction):
         """Skip the song."""
-        log.debug(f"Skip requested by {interaction.user}")
         vc = interaction.guild.voice_client
         if not vc or not vc.is_connected():
             return await interaction.response.send_message('❌ I\'m not currently playing anything!', ephemeral=True)
-
-        if vc.is_paused():
-            pass
-        elif not vc.is_playing():
-            log.debug("Skip called but not playing")
+        if not vc.is_playing() and not vc.is_paused():
             return await interaction.response.send_message('❌ Nothing is playing right now!', ephemeral=True)
 
-        # Get player and current song info
         player = self.get_player(interaction)
-        current_song = player.current
+        current = player.current
         queue_size = player.queue.qsize()
-        
-        # Get song details
-        if current_song:
-            if isinstance(current_song, YTDLSource):
-                song_title = current_song.title
-                song_url = current_song.webpage_url
-                song_thumbnail = current_song.thumbnail
-                song_duration = current_song.duration
-            else:
-                song_title = "Unknown"
-                song_url = None
-                song_thumbnail = None
-                song_duration = None
-        else:
-            song_title = "Unknown"
-            song_url = None
-            song_thumbnail = None
-            song_duration = None
 
-        log.debug("Calling vc.stop()")
         vc.stop()
         self.save_state()
-        
-        # Send enhanced skip embed with thumbnail and details
+
         embed = discord.Embed(
             title="⏭️ Song Skipped",
-            description=f"**{song_title}**" if not song_url else f"**[{song_title}]({song_url})**",
+            description=f"**{link(current.title, current.webpage_url)}**" if current else "**Unknown**",
             color=discord.Color.orange()
         )
-        
-        # Add thumbnail
-        if song_thumbnail:
-            embed.set_thumbnail(url=song_thumbnail)
-        
-        # Add duration if available
-        if song_duration:
-            duration_str = f"{int(song_duration//60)}:{int(song_duration%60):02d}"
-            embed.add_field(name="⏱️ Duration", value=duration_str, inline=True)
-        
+        if current and current.thumbnail:
+            embed.set_thumbnail(url=current.thumbnail)
+        if current and current.duration:
+            embed.add_field(name="⏱️ Duration", value=fmt_duration(current.duration), inline=True)
         embed.add_field(name="👤 Skipped By", value=interaction.user.mention, inline=True)
         embed.add_field(name="📋 Songs in Queue", value=f"{queue_size} remaining", inline=True)
-        
-        if queue_size > 0:
-            embed.set_footer(text="▶️ Playing next song now")
-        else:
-            embed.set_footer(text="Queue is now empty")
-        
+        embed.set_footer(text="▶️ Playing next song now" if queue_size > 0 else "Queue is now empty")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="stop", description="Stops the song and clears the queue")
@@ -1070,17 +825,10 @@ class Music(commands.Cog):
             return await interaction.response.send_message('❌ I\'m not currently connected to a voice channel!', ephemeral=True)
 
         player = self.get_player(interaction)
-        
-        # Clear the queue
         while not player.queue.empty():
-            try:
-                player.queue.get_nowait()
-            except Exception:
-                break
-        
+            player.queue.get_nowait()
         vc.stop()
-        
-        # Send styled stop embed (red)
+
         embed = discord.Embed(
             title="⏹️ Playback Stopped",
             description=f"Stopped by {interaction.user.mention}\nQueue cleared.",
@@ -1090,264 +838,106 @@ class Music(commands.Cog):
 
     @app_commands.command(name="queue", description="Shows the queue")
     async def queue_info(self, interaction: discord.Interaction):
-        """Retrieve a basic queue of upcoming songs."""
+        """Show the playing song and the ones waiting after it."""
         vc = interaction.guild.voice_client
         if not vc or not vc.is_connected():
             return await interaction.response.send_message('❌ I\'m not currently connected to a voice channel!', ephemeral=True)
 
-        player = self.get_player(interaction)
-        
-        # Build formatted queue list with better presentation
+        player = self.players.get(interaction.guild.id)
+        current = player.current if player else None
+        upcoming = list(player.queue._queue) if player else []
+        if not current and not upcoming:
+            empty_embed = discord.Embed(
+                title="📭 Queue is Empty",
+                description="No songs are currently queued.\n\n💡 Use `/play` to add some tracks!",
+                color=discord.Color.light_gray()
+            )
+            return await interaction.response.send_message(embed=empty_embed)
+
         fmt = ""
         total_duration = 0
-        
-        # Show currently playing song first
-        if player.current:
-            current = player.current
-            if isinstance(current, YTDLSource):
-                title = current.title
-                url = current.webpage_url
-                duration = current.duration
-            else:
-                title = "Unknown"
-                url = None
-                duration = 0
-            
-            total_duration += duration
-            
-            # Format duration cleanly
-            mins = int(duration // 60)
-            secs = int(duration % 60)
-            duration_str = f"{mins}:{secs:02d}" if duration else "?"
-            
-            # Truncate long title
-            display_title = title[:45] + "..." if len(title) > 45 else title
-            
-            # Currently playing indicator
-            if url:
-                fmt += f"▶️ **Now Playing:** [{display_title}]({url}) • `{duration_str}`\n\n"
-            else:
-                fmt += f"▶️ **Now Playing:** {display_title} • `{duration_str}`\n\n"
-        
-        # Check if queue has upcoming songs
-        if not player.queue._queue:
-            if not player.current:
-                empty_embed = discord.Embed(
-                    title="📭 Queue is Empty",
-                    description="No songs are currently queued.\n\n💡 Use `/play` to add some tracks!",
-                    color=discord.Color.light_gray()
-                )
-                return await interaction.response.send_message(embed=empty_embed)
-            else:
-                # Only current song, no upcoming
-                embed = discord.Embed(
-                    title='📜 Queue — 1 Track',
-                    description=fmt,
-                    color=discord.Color.blue()
-                )
-                
-                if total_duration > 0:
-                    total_mins = int(total_duration // 60)
-                    total_secs = int(total_duration % 60)
-                    time_str = f"{total_mins}m {total_secs}s"
-                    embed.set_footer(text=f"⏱️ Total Duration: {time_str}")
-                
-                return await interaction.response.send_message(embed=embed)
+        if current:
+            total_duration += current.duration or 0
+            title = link(shorten(current.title, 48), current.webpage_url)
+            fmt += f"▶️ **Now Playing:** {title} • `{fmt_duration(current.duration)}`\n\n"
 
-        upcoming = list(player.queue._queue)
-        fmt += "**Up Next:**\n"
-        
+        if upcoming:
+            fmt += "**Up Next:**\n"
         for i, song in enumerate(upcoming):
-            # Handle both dict (pre-download) and YTDLSource (legacy)
-            if isinstance(song, dict):
-                title = song.get('title', 'Unknown Title')
-                url = song.get('webpage_url', '')
-                duration = song.get('duration', 0)
-            else:
-                title = song.title
-                url = song.webpage_url
-                duration = song.duration
-            
-            total_duration += duration
-            
-            # Format duration cleanly
-            mins = int(duration // 60)
-            secs = int(duration % 60)
-            duration_str = f"{mins}:{secs:02d}" if duration else "?"
-            
-            # Truncate long titles
-            display_title = title[:45] + "..." if len(title) > 45 else title
-            
-            # Clean numbered list with duration
-            line = f"`{i + 1}.` [{display_title}]({url}) • `{duration_str}`\n"
-            
+            total_duration += song.get('duration') or 0
+            title = shorten(song.get('title', 'Unknown Title'), 48)
+            line = f"`{i + 1}.` [{title}]({song.get('webpage_url', '')}) • `{fmt_duration(song.get('duration'))}`\n"
             if len(fmt) + len(line) > 3800:  # Leave room for footer
                 fmt += f"\n*...and {len(upcoming) - i} more*"
                 break
             fmt += line
 
-        # Create modern queue embed
-        total_tracks = 1 if player.current else 0
-        total_tracks += len(upcoming)
-        
+        total_tracks = len(upcoming) + (1 if current else 0)
         embed = discord.Embed(
             title=f'📜 Queue — {total_tracks} Track{"s" if total_tracks != 1 else ""}',
             description=fmt,
             color=discord.Color.blue()
         )
-        
-        # Format total duration nicely
         if total_duration > 0:
-            total_mins = int(total_duration // 60)
-            total_secs = int(total_duration % 60)
-            
-            # Convert to hours if needed
-            if total_mins >= 60:
-                hours = total_mins // 60
-                remaining_mins = total_mins % 60
-                time_str = f"{hours}h {remaining_mins}m"
-            else:
-                time_str = f"{total_mins}m {total_secs}s"
-            
+            mins, secs = divmod(int(total_duration), 60)
+            time_str = f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins}m {secs}s"
             embed.set_footer(text=f"⏱️ Total Duration: {time_str}")
-        
         await interaction.response.send_message(embed=embed)
-
 
     @app_commands.command(name="cache", description="Shows cache statistics")
     async def cache_info(self, interaction: discord.Interaction):
-        """Display cache statistics."""
+        """Show how many songs this replica has cached, and the largest ones."""
         if not os.path.exists('songs'):
             return await interaction.response.send_message('❌ Cache directory not found!', ephemeral=True)
-        
-        # Count files
-        total_songs = 0
-        total_size = 0
-        audio_files = []
-        
-        for filename in os.listdir('songs'):
-            filepath = os.path.join('songs', filename)
-            if os.path.isfile(filepath):
-                file_size = os.path.getsize(filepath)
-                total_size += file_size
-                
-                # Count only audio files (not .json or .part files)
-                if not filename.endswith(('.json', '.part', '.ytdl', '.temp')):
-                    total_songs += 1
-                    
-                    # Try to get friendly name from .info.json
-                    video_id = filename.rsplit('.', 1)[0]  # Remove extension
-                    info_path = os.path.join('songs', f'{video_id}.info.json')
-                    friendly_name = filename  # Default to filename
-                    
-                    if os.path.exists(info_path):
-                        try:
-                            with open(info_path, 'r') as f:
-                                info = json.load(f)
-                                friendly_name = info.get('title', filename)
-                        except Exception:
-                            pass  # Use filename if JSON reading fails
-                    
-                    audio_files.append((friendly_name, file_size, video_id))
-        
-        # Format size
-        if total_size >= 1_073_741_824:  # >= 1 GB
-            size_str = f"{total_size / 1_073_741_824:.2f} GB"
-        elif total_size >= 1_048_576:  # >= 1 MB
-            size_str = f"{total_size / 1_048_576:.2f} MB"
+
+        total_size, total_songs = cache_stats()
+        if total_size >= 1024**3:
+            size_str = f"{total_size / 1024**3:.2f} GB"
+        elif total_size >= 1024**2:
+            size_str = f"{total_size / 1024**2:.2f} MB"
         else:
             size_str = f"{total_size / 1024:.2f} KB"
-        
-        # Create embed
+
         embed = discord.Embed(
             title="💾 Cache Statistics",
             description=f"**{total_songs}** songs cached\n**{size_str}** total size",
             color=discord.Color.green()
         )
-        
-        # Show top 5 largest files
-        if audio_files:
-            audio_files.sort(key=lambda x: x[1], reverse=True)
-            top_files = ""
-            for i, (song_title, size, video_id) in enumerate(audio_files[:5], 1):
-                # Get duration from info file
-                info_path = os.path.join('songs', f'{video_id}.info.json')
-                duration_str = "?"
-                if os.path.exists(info_path):
-                    try:
-                        with open(info_path, 'r') as f:
-                            info = json.load(f)
-                            duration = info.get('duration', 0)
-                            if duration:
-                                mins = int(duration // 60)
-                                secs = int(duration % 60)
-                                duration_str = f"{mins}:{secs:02d}"
-                    except Exception:
-                        pass
-                
-                # Truncate long titles
-                display_name = song_title[:40] + "..." if len(song_title) > 40 else song_title
-                file_mb = size / 1_048_576
-                top_files += f"`{i}.` {display_name} • `{duration_str}` • {file_mb:.1f} MB\n"
-            
-            if top_files:
-                embed.add_field(name="📊 Largest Files", value=top_files, inline=False)
-        
+
+        largest = sorted(cached_audio(), key=lambda song: song[2], reverse=True)[:5]
+        if largest:
+            lines = []
+            for i, (video_id, filename, size) in enumerate(largest, 1):
+                info = read_info(video_id) or {}
+                title = shorten(info.get('title', filename), 43)
+                lines.append(f"`{i}.` {title} • `{fmt_duration(info.get('duration'))}` • {size / 1024**2:.1f} MB")
+            embed.add_field(name="📊 Largest Files", value="\n".join(lines), inline=False)
+
         embed.set_footer(text="💡 Use /play to cache more songs automatically")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="playing", description="Shows the currently playing song")
     async def now_playing(self, interaction: discord.Interaction):
         """Shows the currently playing song."""
-        # Check if user is in a voice channel
         if not interaction.user.voice:
             return await interaction.response.send_message('❌ You need to be in a voice channel to see what\'s playing!', ephemeral=True)
-        
-        player = self.get_player(interaction)
+
+        player = self.players.get(interaction.guild.id)
         if not player or not player.current:
             return await interaction.response.send_message('❌ Nothing is currently playing!', ephemeral=True)
-        
+
         source = player.current
-        
-        # Create Embed for Now Playing
         embed = discord.Embed(title="Now Playing", description=f"[{source.title}]({source.webpage_url})", color=discord.Color.purple())
-        
         if source.thumbnail:
             embed.set_image(url=source.thumbnail)
-            
         if source.duration:
-            # Calculate progress
-            current_pos = 0
-            if player.playback_start_time:
-                current_pos = int(time.time() - player.playback_start_time)
-            
-            # Adjust for seek position if resumed
-            if hasattr(player, 'seek_position') and player.seek_position > 0:
-                 # This is tricky because seek_position is reset after play starts
-                 # But we can try to estimate if we track it better. 
-                 # For now, simple elapsed time is best effort.
-                 pass
-
-            total_mins = int(source.duration // 60)
-            total_secs = int(source.duration % 60)
-            
-            curr_mins = int(current_pos // 60)
-            curr_secs = int(current_pos % 60)
-            
-            embed.add_field(name="Duration", value=f"{curr_mins}:{curr_secs:02d} / {total_mins}:{total_secs:02d}", inline=True)
-        
+            position = int(time.time() - player.playback_start_time) if player.playback_start_time else 0
+            embed.add_field(name="Duration", value=f"{fmt_duration(position)} / {fmt_duration(source.duration)}", inline=True)
         if source.requested_by:
             embed.add_field(name="Requested By", value=source.requested_by, inline=True)
-            
-        # Add Cache Status
-        if source.is_cached:
-            embed.set_footer(text="💾 Playing from Cache")
-        else:
-            embed.set_footer(text="☁️ Streaming from YouTube")
-            
+        embed.set_footer(text="💾 Playing from Cache" if source.is_cached else "☁️ New Download")
         await interaction.response.send_message(embed=embed)
 
 async def setup(bot):
-    if not os.path.exists('songs'):
-        os.makedirs('songs')
+    os.makedirs('songs', exist_ok=True)
     await bot.add_cog(Music(bot))

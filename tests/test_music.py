@@ -66,3 +66,29 @@ def test_search_results_keep_youtube_order_with_cached_first():
     results = [{'title': t, 'is_cached': cached} for t, cached in
                [('Zebra', False), ('Apple', False), ('Mango', True), ('Banana', True)]]
     assert [r['title'] for r in music.cached_first(results)] == ['Mango', 'Banana', 'Zebra', 'Apple']
+
+
+def test_fmt_duration():
+    assert [music.fmt_duration(s) for s in (None, 0, 61, 599.6)] == ['?', '0:00', '1:01', '9:59']
+
+
+def test_shorten():
+    assert music.shorten('abcdef', 6) == 'abcdef'
+    assert music.shorten('abcdefg', 6) == 'abc...'
+
+
+def test_check_length_refuses_songs_over_ten_minutes():
+    music.check_length({'duration': 600})
+    music.check_length({})
+    with pytest.raises(ValueError, match='10m 01s'):
+        music.check_length({'duration': 601})
+
+
+def test_cached_audio_and_read_info(songs):
+    add_song(songs, 'a', 1000, 1000)
+    (songs / 'b.webm.part').write_bytes(b'x' * 10)
+    (songs / 'c.info.json').write_text('not json')
+    assert music.cached_audio() == [('a', 'a.webm', 1000)]
+    assert music.read_info('a') == {}
+    assert music.read_info('c') is None
+    assert music.read_info('missing') is None

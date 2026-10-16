@@ -7,6 +7,7 @@ import math
 import os
 import signal
 import socket
+import sys
 import time
 from dotenv import load_dotenv
 from prometheus_client import start_http_server
@@ -99,11 +100,11 @@ async def on_app_command_error(interaction, error):
 async def sync_command(interaction: discord.Interaction):
     """Clear guild commands and wait for global commands to propagate."""
     await interaction.response.defer(ephemeral=True)
-    
+
     # Clear guild-specific commands to remove duplicates
     interaction.client.tree.clear_commands(guild=interaction.guild)
     await interaction.client.tree.sync(guild=interaction.guild)
-    
+
     await interaction.followup.send(
         "✅ Cleared guild commands. Global commands will appear in ~1 hour.\n"
         "**Tip:** Restart Discord to see them immediately.",
@@ -168,6 +169,6 @@ async def main():
 
 if __name__ == "__main__":
     if not TOKEN:
-        log.error("Error: DISCORD_TOKEN not found in .env file.")
-    else:
-        asyncio.run(main())
+        # In the cluster it comes from the discord-bot-secret Secret
+        sys.exit("DISCORD_TOKEN is not set (put it in .env to run locally)")
+    asyncio.run(main())

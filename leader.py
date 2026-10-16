@@ -8,7 +8,7 @@ take over straight away.
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import aiohttp
 
@@ -26,7 +26,7 @@ RETRY_PERIOD = 2
 
 
 def _now():
-    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+    return datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
 
 
 class LeaderElector:
@@ -89,7 +89,7 @@ class LeaderElector:
                 self.observed = (updated['metadata']['resourceVersion'], self.clock())
                 return True
             return False
-        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+        except (TimeoutError, aiohttp.ClientError, OSError) as e:
             metrics.LEASE_ERRORS.inc()
             log.warning(f"Lease request failed: {e!r}")
             return False
@@ -122,5 +122,5 @@ class LeaderElector:
             lease['spec'].update(holderIdentity='', leaseDurationSeconds=1, renewTime=_now())
             await self.kube.request('PUT', self.path, lease)
             log.info("Released the lease")
-        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+        except (TimeoutError, aiohttp.ClientError, OSError) as e:
             log.warning(f"Lease release failed: {e!r}")

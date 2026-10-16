@@ -53,7 +53,7 @@ class StateStore:
         if self.kube is None or self.latest is None:
             return
         # Two tries keeps shutdown well inside the pod's 30s termination grace period
-        for attempt in range(2):
+        for _ in range(2):
             if await self._write_configmap(self.latest):
                 return
             await asyncio.sleep(RETRY_DELAY)
@@ -64,7 +64,7 @@ class StateStore:
                 return {}
             with open(STATE_FILE) as f:
                 return json.load(f)
-        for attempt in range(ATTEMPTS):
+        for _ in range(ATTEMPTS):
             try:
                 status, cm = await self.kube.request('GET', self.path)
                 if status == 404:
@@ -72,7 +72,7 @@ class StateStore:
                 if status == 200:
                     return json.loads((cm.get('data') or {}).get('state.json') or '{}')
                 log.warning(f"Error loading state: HTTP {status}")
-            except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+            except (TimeoutError, aiohttp.ClientError, OSError) as e:
                 log.warning(f"Error loading state: {e!r}")
             await asyncio.sleep(RETRY_DELAY)
         raise RuntimeError(f"could not read ConfigMap {self.configmap}")
@@ -103,7 +103,7 @@ class StateStore:
                 return True
             log.warning(f"Error saving state: HTTP {status}")
             metrics.STATE_SAVE_ERRORS.inc()
-        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+        except (TimeoutError, aiohttp.ClientError, OSError) as e:
             metrics.STATE_SAVE_ERRORS.inc()
             log.warning(f"Error saving state: {e!r}")
         return False

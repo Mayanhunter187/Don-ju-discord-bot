@@ -22,7 +22,7 @@ class FakeS3:
 
     def _now(self):
         self.clock += 1
-        return datetime.datetime.fromtimestamp(self.clock, datetime.timezone.utc)
+        return datetime.datetime.fromtimestamp(self.clock, datetime.UTC)
 
     def put(self, key, data):
         self.objects[key] = (data, self._now())

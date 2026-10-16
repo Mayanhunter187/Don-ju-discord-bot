@@ -8,9 +8,9 @@ class Help(commands.Cog):
 
     @app_commands.command(name="help", description="Shows help for commands")
     @app_commands.describe(command="Optional: Get help for a specific command")
-    async def help(self, interaction: discord.Interaction, command: str = None):
+    async def help(self, interaction: discord.Interaction, command: str | None = None):
         """Shows help information."""
-        
+
         if command:
             # Show specific command help
             cmd = self.bot.tree.get_command(command)
@@ -20,13 +20,13 @@ class Help(commands.Cog):
                     description=cmd.description or "No description available.",
                     color=discord.Color.blue()
                 )
-                
+
                 if hasattr(cmd, 'parameters') and cmd.parameters:
                     params_text = ""
                     for param in cmd.parameters:
                         params_text += f"**{param.name}**: {param.description or 'No description'}\n"
                     embed.add_field(name="Parameters", value=params_text, inline=False)
-                
+
                 await interaction.response.send_message(embed=embed)
             else:
                 await interaction.response.send_message(f"Command `{command}` not found.", ephemeral=True)
@@ -37,7 +37,7 @@ class Help(commands.Cog):
                 description="Here are all available commands, organized by category:",
                 color=discord.Color.gold()
             )
-            
+
             # Playback Controls
             playback_cmds = [
                 ("play", "Play a song from YouTube (URL, search, or `random` for a cached song)"),
@@ -47,15 +47,15 @@ class Help(commands.Cog):
             ]
             playback_text = "\n".join([f"`/{cmd}` - {desc}" for cmd, desc in playback_cmds])
             embed.add_field(name="🎮 Playback Controls", value=playback_text, inline=False)
-            
+
             # Queue Management
             queue_cmds = [
                 ("queue", "View the current song queue"),
-                ("cache", "View cache statistics and recent downloads")
+                ("cache", "View cache statistics and the largest cached songs")
             ]
             queue_text = "\n".join([f"`/{cmd}` - {desc}" for cmd, desc in queue_cmds])
             embed.add_field(name="📋 Queue & Cache", value=queue_text, inline=False)
-            
+
             # Utility
             utility_cmds = [
                 ("sync", "Sync commands to the server (Admin only)"),
@@ -63,9 +63,9 @@ class Help(commands.Cog):
             ]
             utility_text = "\n".join([f"`/{cmd}` - {desc}" for cmd, desc in utility_cmds])
             embed.add_field(name="🛠️ Utility", value=utility_text, inline=False)
-            
+
             embed.set_footer(text="Use /help <command> for detailed information about a specific command")
-            
+
             await interaction.response.send_message(embed=embed)
 
 async def setup(bot):
