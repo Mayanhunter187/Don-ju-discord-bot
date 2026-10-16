@@ -76,6 +76,10 @@ STATE_SONG_KEYS = ('id', 'ext', 'title', 'webpage_url', 'duration', 'thumbnail',
 def trim_song(song):
     return {k: song[k] for k in STATE_SONG_KEYS if k in song}
 
+def cached_first(results):
+    """Search results with cached songs first, each group in YouTube's order (best match first)."""
+    return sorted(results, key=lambda song: not song['is_cached'])
+
 def cache_stats():
     """Return (total bytes, number of songs) in the cache."""
     total = songs = 0
@@ -959,8 +963,7 @@ class Music(commands.Cog):
                     'is_cached': is_cached
                 })
             
-            # Sort: cached songs first, then new downloads
-            songs_with_cache_status.sort(key=lambda x: (not x['is_cached'], x['title']))
+            songs_with_cache_status = cached_first(songs_with_cache_status)
             
             # Add buttons in vertical list (one per row)
             for i, song in enumerate(songs_with_cache_status):

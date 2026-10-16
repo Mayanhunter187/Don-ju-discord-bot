@@ -60,3 +60,9 @@ def test_trim_song_keeps_only_resume_fields():
 def test_music_cog_commands():
     names = {command.name for command in music.Music.__cog_app_commands__}
     assert names == {'play', 'skip', 'stop', 'queue', 'cache', 'playing'}
+
+
+def test_search_results_keep_youtube_order_with_cached_first():
+    results = [{'title': t, 'is_cached': cached} for t, cached in
+               [('Zebra', False), ('Apple', False), ('Mango', True), ('Banana', True)]]
+    assert [r['title'] for r in music.cached_first(results)] == ['Mango', 'Banana', 'Zebra', 'Apple']

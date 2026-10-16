@@ -7,6 +7,7 @@ import math
 import os
 import signal
 import socket
+import time
 from dotenv import load_dotenv
 from prometheus_client import start_http_server
 
@@ -35,6 +36,7 @@ class MusicBot(commands.Bot):
         # Slash commands only, so no message content intent and no text prefix
         super().__init__(command_prefix=commands.when_mentioned, intents=discord.Intents.default())
         self.state_store = state_store
+        self.sync_task = None
 
     async def setup_hook(self):
         # Load extensions
@@ -48,12 +50,25 @@ class MusicBot(commands.Bot):
                         log.error(f'Failed to load extension cogs.{filename[:-3]}: {e}')
         else:
             log.error("Error: ./cogs directory not found!")
-        # Sync commands globally ONLY
+        # setup_hook runs before the gateway connects, and the sync has taken
+        # ~45s, so run it in the background instead of holding up a takeover
+        self.sync_task = asyncio.create_task(self.sync_commands())
+
+    async def sync_commands(self):
+        """Register the slash commands globally. Commands registered by an
+        earlier run keep working meanwhile; only new or changed ones wait."""
+        start = time.monotonic()
         try:
             synced = await self.tree.sync()
-            log.info(f"Synced {len(synced)} command(s) globally")
+            log.info(f"Synced {len(synced)} command(s) globally in {time.monotonic() - start:.0f}s")
         except Exception as e:
             log.error(f"Failed to sync commands: {e}")
+
+    async def close(self):
+        if self.sync_task:
+            self.sync_task.cancel()
+        await super().close()
+
     async def on_ready(self):
         log.info(f'Logged in as {self.user} (ID: {self.user.id})')
 
