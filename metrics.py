@@ -7,7 +7,7 @@ DISCORD_LATENCY = Gauge('donju_discord_latency_seconds', 'Discord gateway heartb
 VOICE_CONNECTIONS = Gauge('donju_voice_connections', 'Voice channels the bot is connected to')
 QUEUE_LENGTH = Gauge('donju_queue_length', 'Songs waiting in all queues, not counting the ones playing')
 
-SONGS_PLAYED = Counter('donju_songs_played_total', 'Songs started', ['source'])  # cache | download
+SONGS_PLAYED = Counter('donju_songs_played_total', 'Songs started', ['source'])  # cache | store | download
 COMMANDS = Counter('donju_commands_total', 'Slash commands completed', ['command'])
 COMMAND_ERRORS = Counter('donju_command_errors_total', 'Slash commands that raised an error', ['command'])
 
@@ -18,6 +18,7 @@ YTDL_SECONDS = Histogram('donju_ytdl_seconds', 'Time spent in yt-dlp calls', ['k
 CACHE_BYTES = Gauge('donju_cache_bytes', 'Size of the song cache on this replica')
 CACHE_SONGS = Gauge('donju_cache_songs', 'Songs in the cache on this replica')
 CACHE_EVICTIONS = Counter('donju_cache_evictions_total', 'Songs evicted from the cache')
+SONG_STORE = Counter('donju_song_store_total', 'Requests to the shared song store', ['op', 'result'])
 
 STATE_SAVE_ERRORS = Counter('donju_state_save_errors_total', 'Failed writes of the saved queue')
 LEASE_ERRORS = Counter('donju_lease_errors_total', 'Failed requests to the leader lease')

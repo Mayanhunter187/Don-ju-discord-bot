@@ -55,6 +55,24 @@ spec:
                 secretKeyRef:
                   name: discord-bot-secret
                   key: token
+            # The song store both bots share (Garage, in the cluster). The key is
+            # optional: without the song-store Secret the bot only uses its own cache.
+            - name: SONG_STORE_ENDPOINT
+              value: http://garage.garage.svc.cluster.local:3900
+            - name: SONG_STORE_BUCKET
+              value: don-ju-songs
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: song-store
+                  key: access-key-id
+                  optional: true
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: song-store
+                  key: secret-access-key
+                  optional: true
           # The bot touches this file every 5s while its event loop is healthy
           readinessProbe:
             exec:
@@ -92,7 +110,8 @@ spec:
         - name: cookies
           secret:
             secretName: youtube-cookies
-  # Each replica keeps its own song cache on its node
+  # Each replica keeps its own song cache on its node; the shared song store
+  # (SONG_STORE_ENDPOINT) sits behind it
   volumeClaimTemplates:
     - metadata:
         name: songs

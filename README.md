@@ -75,6 +75,14 @@ resume it. Each replica keeps its own song cache on a `local-path` volume. The
 least recently played songs are evicted once a cache passes `CACHE_MAX_BYTES`
 (default 4 GiB).
 
+Behind that cache sits a song store both bots share: an S3 bucket
+(`SONG_STORE_BUCKET`) on the cluster's Garage, at `SONG_STORE_ENDPOINT`, with
+the key from the `song-store` Secret. A song missing locally is copied from the
+store; a fresh download is uploaded to it, so each song comes from YouTube once.
+The store drops its least recently played songs past `SONG_STORE_MAX_BYTES`
+(default 20 GiB). Without the endpoint or key the store is off, and store errors
+count as misses, so playback never depends on it.
+
 The bot is in too few servers to need sharding; Discord requires it only from
 2,500 guilds, and a guild is always served by a single shard either way.
 
