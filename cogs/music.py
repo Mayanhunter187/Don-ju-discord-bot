@@ -33,11 +33,9 @@ ytdl_format_options = {
     'noprogress': True,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['android', 'web']
-        }
-    },
+    # No player_client override: yt-dlp picks the YouTube clients. Forcing
+    # android,web with cookies skipped android and left web only format 18, a
+    # 360p video with 96 kbps audio, instead of 130 kbps Opus.
     # JS challenges are solved with Node.js and the yt-dlp-ejs package
     'js_runtimes': {
         'node': {}
@@ -474,6 +472,9 @@ class Music(commands.Cog):
         if self.song_store and await self.song_store.fetch(filename):
             return 'store'
         await download(info)
+        if info.get('vcodec') not in (None, 'none'):
+            log.warning(f"No audio-only format for {info.get('id')}; got video format {info.get('format_id')}, "
+                        "so the sound is lower quality")
         if self.song_store:
             self.song_store.upload_later(filename)
         return 'download'
