@@ -14,6 +14,7 @@ import random
 import time
 
 import metrics
+import songstore
 
 log = logging.getLogger(__name__)
 
@@ -161,7 +162,7 @@ async def download(info):
     await extract_info(info['webpage_url'], download=True)
 
 class YTDLSource(discord.PCMVolumeTransformer):
-    def __init__(self, source, *, data, volume=0.5, is_cached=False):
+    def __init__(self, source, *, data, volume=0.5, is_cached=False, origin=None):
         super().__init__(source, volume)
         self.data = data
         self.title = data.get('title')
@@ -171,6 +172,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.uploader = data.get('uploader')
         self.requested_by = data.get('requested_by')
         self.is_cached = is_cached
+        # cache | store | download: where the audio file came from
+        self.origin = origin or ('cache' if is_cached else 'download')
         self.webpage_url = data.get('webpage_url')
 
     @classmethod
@@ -191,7 +194,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         return data
 
     @classmethod
-    def create_from_data(cls, data, stream=False, is_cached=False, seek_offset=0):
+    def create_from_data(cls, data, stream=False, is_cached=False, seek_offset=0, origin=None):
         # Max length check (10 minutes = 600 seconds)
         duration = data.get('duration')
         if duration and duration > 600:
@@ -209,7 +212,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
                 before_opts = f"-ss {int(seek_offset)}"
             options['before_options'] = before_opts
             log.debug(f"Applied seek offset {int(seek_offset)} seconds to FFmpeg options")
-        return cls(discord.FFmpegPCMAudio(filename, **options), data=data, is_cached=is_cached)
+        return cls(discord.FFmpegPCMAudio(filename, **options), data=data, is_cached=is_cached, origin=origin)
 
 class MusicPlayer:
     def __init__(self, bot, guild, channel):
@@ -244,22 +247,12 @@ class MusicPlayer:
             if isinstance(source, dict):
                 # It's pre-fetched data
                 try:
-                    # Check if we need to download (Cache Logic)
-                    filename = ytdl.prepare_filename(source)
-                    is_cached = os.path.exists(filename)
-                    
-                    if not is_cached:
-                        # Cleanup cache if needed
-                        self.bot.get_cog("Music").cleanup_cache()
-
-                        # Download
-                        await download(source)
-                    else:
-                        # Mark as recently played so cache eviction keeps it
-                        os.utime(filename)
+                    # Local cache, then the shared song store, then YouTube
+                    origin = await self.bot.get_cog("Music").fetch_song(source)
 
                     # Create source from local file (stream=False), applying seek if resuming
-                    source = YTDLSource.create_from_data(source, stream=False, is_cached=is_cached, seek_offset=self.seek_position)
+                    source = YTDLSource.create_from_data(source, stream=False, is_cached=origin != 'download',
+                                                         seek_offset=self.seek_position, origin=origin)
                     # Reset seek position after applying
                     if self.seek_position > 0:
                         log.debug(f"Resumed from {self.seek_position} seconds")
@@ -294,7 +287,7 @@ class MusicPlayer:
                 self.playback_start_time = time.time()
                 
                 self.guild.voice_client.play(source, after=after_callback)
-                metrics.SONGS_PLAYED.labels('cache' if source.is_cached else 'download').inc()
+                metrics.SONGS_PLAYED.labels(source.origin).inc()
                 
                 # Set bot status to "Listening to [Song Name]"
                 await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=source.title))
@@ -442,6 +435,7 @@ class Music(commands.Cog):
         self.store = bot.state_store
         self.store_task = None
         self.frozen = False  # set on shutdown so the final saved state isn't overwritten
+        self.song_store = songstore.SongStore.from_env()  # None when off
         self.cleanup_partial_files()
         metrics.QUEUE_LENGTH.set_function(lambda: sum(p.queue.qsize() for p in list(self.players.values())))
         metrics.VOICE_CONNECTIONS.set_function(lambda: len(self.bot.voice_clients))
@@ -461,6 +455,28 @@ class Music(commands.Cog):
         self.save_state()
         self.frozen = True
         await self.store.flush()
+
+    async def fetch_song(self, info):
+        """Make sure a song's audio is in the local cache, and say where it came from.
+
+        'cache' if it was already here, 'store' if it was copied from the shared
+        song store, 'download' if it came from YouTube (it's then shared to the store).
+        """
+        filename = ytdl.prepare_filename(info)
+        if os.path.exists(filename):
+            # Mark as recently played so cache eviction keeps it, here and in the store
+            os.utime(filename)
+            if self.song_store:
+                self.song_store.touch_later(filename)
+            return 'cache'
+
+        self.cleanup_cache()
+        if self.song_store and await self.song_store.fetch(filename):
+            return 'store'
+        await download(info)
+        if self.song_store:
+            self.song_store.upload_later(filename)
+        return 'download'
 
     def cleanup_cache(self):
         """Evict least recently played songs until the cache fits CACHE_MAX_BYTES."""
@@ -705,6 +721,9 @@ class Music(commands.Cog):
         if match:
             video_id = match.group(1)
             info_path = f'songs/{video_id}.info.json'
+            # Another replica or the other bot may have stored it already
+            if not os.path.exists(info_path) and self.song_store:
+                await self.song_store.fetch(info_path, with_info=False)
             if os.path.exists(info_path):
                 try:
                     with open(info_path, 'r') as f:
@@ -737,7 +756,7 @@ class Music(commands.Cog):
             
             # Now check if audio file exists (Legacy Cache Check)
             filename = ytdl.prepare_filename(data)
-            if os.path.exists(filename):
+            if os.path.exists(filename) or (self.song_store and await self.song_store.exists(filename)):
                 is_cache_hit = True
                 # Update message to Cache Hit
                 new_msg = random.choice(flavor_texts["cache"]).format(query=data.get('title', query))
@@ -771,8 +790,7 @@ class Music(commands.Cog):
                     try:
                         log.debug(f"Starting background download for {data.get('title', 'Unknown')}")
                         # This will download and cache the file
-                        self.cleanup_cache()
-                        await download(data)
+                        await self.fetch_song(data)
                         log.debug(f"Background download complete for {data.get('title', 'Unknown')}")
                     except Exception as e:
                         log.debug(f"Background download failed: {e}")
