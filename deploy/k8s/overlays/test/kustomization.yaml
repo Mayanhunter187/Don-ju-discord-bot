@@ -8,4 +8,4 @@ resources:
   - ../../base
 images:
   - name: ghcr.io/mayanhunter187/don-ju-discord-bot
-    newTag: 20261016-75b033f
+    newTag: 20261016-c7dfb8e
