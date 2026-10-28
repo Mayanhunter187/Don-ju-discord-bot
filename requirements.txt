@@ -4,7 +4,7 @@ discord.py[voice]==2.7.1
 davey==0.1.7
 python-dotenv==1.2.4
 # [default] adds yt-dlp-ejs, which solves YouTube's JS challenges locally with Node.js
-yt-dlp[default]==2026.8.19
+yt-dlp[default]==2026.10.21
 prometheus-client==0.26.0
 # S3 client for the shared song store (Garage in the cluster)
 boto3==1.43.114
