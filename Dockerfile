@@ -1,6 +1,6 @@
 # Static ffmpeg, and the Node.js runtime yt-dlp uses for YouTube's JS
 # challenges. Named stages, so Dependabot sees these images and updates them.
-FROM mwader/static-ffmpeg:9.0.2-1 AS ffmpeg
+FROM mwader/static-ffmpeg:9.1 AS ffmpeg
 FROM node:22-slim AS node
 
 FROM python:3.11-slim
